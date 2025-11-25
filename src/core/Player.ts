@@ -14,32 +14,35 @@ import {
   AudioSource,
   PlayerState,
   Volume,
+  PlayerEvents,
 } from "./types";
 import { EQ } from "./EQ";
+import { EventEmitter } from "./EventEmitter";
+import { PlaybackTimeController } from "./PlaybackTimeController";
+import { AudioGraph } from "./AudioGraph";
+import {  LogLevel, playerLogger } from "./utils/logger";
 
 export class Player {
   private _ctx: AudioContext;
-  private _gainNode: GainNode;
 
-  private _eq: EQ;
-  private _finalOutput: GainNode;
-
+private _audioGraph: AudioGraph;
   private _input?: Input;
   private _track: InputAudioTrack | null = null;
   private _audioBuffer?: AudioBuffer;
 
   private _currentSource?: AudioBufferSourceNode;
-  private _startTime: number = 0;
-  private _pausedAt: number = 0;
   private _state: PlayerState = "idle";
 
-  private _events = new Map<PlayerEvent, Set<Function>>();
+  private _events = new EventEmitter<PlayerEvents>();
+
+
+  private _abortController?: AbortController
+
+  private _timeController: PlaybackTimeController;
 
   // Scratch buffer for enabling iOS to dispose of web audio buffers correctly, as per:
   // http://stackoverflow.com/questions/24119684
   private _scratchBuffer: AudioBuffer | null = null;
-  private _loop = false;
-  private _playbackRate = 1;
 
   private _volumeBeforeMute: Volume = Volume(1.0);
 
@@ -49,68 +52,57 @@ export class Player {
         latencyHint: (this._options.latencyHint ?? "interactive") as any,
       }
     );
+    playerLogger.info("Player initialized.", { latencyHint: this._options.latencyHint });
     this._scratchBuffer = this._ctx.createBuffer(1, 1, 22050);
-    this._gainNode = this._ctx.createGain();
-    this._eq = new EQ(this._ctx);
-    this._finalOutput = this._ctx.createGain();
-
-    this._gainNode.connect(this._eq.input);
-    this._eq.output.connect(this._finalOutput);
-    this._finalOutput.connect(this._ctx.destination);
+    this._timeController = new PlaybackTimeController(() => this.duration);
+   this._audioGraph = new AudioGraph(this._ctx);
   }
-
-  private updatePosition() {
-    if (this._state !== "playing") return;
-
-    const elapsedReal = this._ctx.currentTime - this._startTime;
-    const elapsedTrack = elapsedReal * this._playbackRate;
-
-    this._pausedAt += elapsedTrack;
-
-    if (this._loop && this.duration > 0) {
-      this._pausedAt = this._pausedAt % this.duration;
-    } else if (this.duration > 0) {
-      this._pausedAt = Math.min(this._pausedAt, this.duration);
-    }
-
-    this._startTime = this._ctx.currentTime;
-  }
-
+  /**
+   * Get the current playback position.
+   * @returns {number} Current time in seconds.
+   */
   get currentTime() {
-    if (this._state !== "playing") {
-      return this._pausedAt;
-    }
-
-    const elapsedReal = this._ctx.currentTime - this._startTime;
-    const elapsedTrack = elapsedReal * this._playbackRate;
-
-    let time = this._pausedAt + elapsedTrack;
-
-    if (this._loop && this.duration > 0) {
-      time = time % this.duration;
-    } else if (this.duration > 0) {
-      time = Math.min(time, this.duration);
-    }
-
-    return time;
+    return this._timeController.compute(this._ctx.currentTime);
   }
 
   /**
-   *  Get duration of loaded track
-   * @returns {number} duration in seconds
+   * Get duration of the loaded track.
+   * @returns {number} Duration in seconds. Returns 0 if no track is loaded.
    */
-
   get duration() {
     return this._audioBuffer?.duration ?? 0;
   }
-
+  /**
+   * Retrieves the Equalizer (EQ) module instance for direct control of frequency bands.
+   * @returns {EQ} The Equalizer instance.
+   */
   getEQ(): EQ {
-    return this._eq;
+    return this._audioGraph.eq; 
   }
-
+  /**
+   * Enables or disables the Equalizer module within the audio graph.
+   * @param {boolean} bypassEnabled - `true` to bypass (disable) the EQ, `false` to enable it.
+   * @returns {this} The player instance for chaining.
+   */
+  setEQBypass(bypassEnabled: boolean): this {
+    this._audioGraph.bypassEQ(bypassEnabled);
+    return this;
+  }
+  /**
+   * Loads an audio track from a given source.
+   * Supports URLs, Files/Blobs, ArrayBuffers, and ReadableStreams.
+   * Attempts fast native decoding first, falling back to mediabunny if needed.
+   * @async
+   * @param {AudioSource} source - The source of the audio data.
+   * @returns {Promise<void>}
+   * @throws {Error} If no audio track is found or data is empty.
+   */
   async load(source: AudioSource) {
     await this.stop();
     this._state = "loading";
+    //TODO: Add abortController and mb create different class to control src loading 
+    this._abortController = new AbortController()
+    const signal = this._abortController.signal
 
     let arrayBuffer: ArrayBuffer;
     if (typeof source === "string") {
@@ -137,7 +129,14 @@ export class Player {
       return this.loadSlowPath(source);
     }
   }
-
+  /**
+   * Internal method for loading audio using the mediabunny library (slow path).
+   * Decodes complex formats, streams, and chunks audio data.
+   * @private
+   * @async
+   * @param {AudioSource} source
+   * @returns {Promise<void>}
+   */
   private async loadSlowPath(source: AudioSource) {
     const inputSource =
       source instanceof File || source instanceof Blob
@@ -209,8 +208,10 @@ export class Player {
   }
 
   /**
-   *
-   * @returns
+   * Starts or resumes audio playback from the current position.
+   * Automatically resumes the AudioContext if suspended.
+   * @async
+   * @returns {Promise<void>}
    */
   async play(): Promise<void> {
     if (!this._audioBuffer) return;
@@ -225,27 +226,33 @@ export class Player {
 
     const source = this._ctx.createBufferSource();
     source.buffer = this._audioBuffer;
-    source.playbackRate.value = this._playbackRate;
-    source.loop = this._loop;
-    source.connect(this._gainNode);
-
-    let offset = this._pausedAt;
-    if (this._loop && this.duration > 0) {
-      offset = offset % this.duration;
+    
+    source.playbackRate.value = this._timeController.getRate(); 
+    source.loop = this._timeController.getLoop();
+    
+    source.connect(this._audioGraph.input);
+    
+    let offset = this._timeController.compute(this._ctx.currentTime);
+    
+    if (this._timeController.getLoop() && this.duration > 0) {
+        offset = offset % this.duration;
     }
 
     source.start(0, offset);
 
-    this._startTime = this._ctx.currentTime;
-    this._pausedAt = offset;
+    this._timeController.onStart(offset);
+    this._timeController.setStartCtxTime(this._ctx.currentTime);
+    
     this._state = "playing";
     this._currentSource = source;
-
-    if (!this._loop) {
+    playerLogger.info(`Playback started at offset ${offset.toFixed(2)}s.`);
+    if (!this._timeController.getLoop()) { 
       source.onended = () => {
         if (this._currentSource === source) {
           this._state = "idle";
-          this._pausedAt = 0;
+          
+          this._timeController.seek(0);
+          
           this._currentSource = undefined;
           this.emit("ended");
         }
@@ -255,51 +262,52 @@ export class Player {
     this.emit("play");
   }
   /**
-   *
-   * @returns
+   * Pauses audio playback, retaining the current position.
+   * @returns {void}
    */
   pause() {
     if (this._state !== "playing" || !this._currentSource) return;
 
-    this.updatePosition();
-
+    this._timeController.pauseAt(this._ctx.currentTime);
+    
     this.stopCurrentSource();
     this._state = "paused";
     this.emit("pause");
   }
 
   /**
-   * Stop playback and reset position to start
-   * @example player.stop();
-   * @return void
+   * Stops playback and resets the position to 0 seconds.
+   * @returns {void}
    */
   stop() {
     this.stopCurrentSource();
-    this._pausedAt = 0;
-    this._startTime = 0;
+    
+    this._timeController.onStart(0); 
+    
     this._state = "idle";
     this.emit("stop");
   }
   /**
-   *
-   * @param seconds
-   * @returns
+   * Seeks to a specific time offset in the track.
+   * If playing, playback restarts at the new offset.
+   * @param {number} seconds - The time offset in seconds.
+   * @returns {this} The player instance for chaining.
    */
   seek(seconds: number): this {
-    const clamped = Math.max(0, Math.min(seconds, this.duration || 0));
-
-    this._pausedAt = clamped;
-
+    this._timeController.seek(seconds);
+    const clamped = this._timeController.compute(this._ctx.currentTime);
     if (this._state === "playing") {
       this.play();
     }
-
+    
     this.emit("timeupdate", clamped);
     return this;
   }
 
   /**
-   * Stop and disconnect current audio source
+   * Stops and disconnects the current AudioBufferSourceNode.
+   * Includes scratch buffer logic for iOS Web Audio cleanup.
+   * @private
    */
   private stopCurrentSource() {
     if (!this._currentSource) return;
@@ -321,57 +329,61 @@ export class Player {
   }
 
   /**
-   * Set volume
-   * @example player.setVolume(0.5);
-   * @param {Volume} v number from 0.0 to 1.0
+   * Sets the playback volume.
+   * @param {Volume} v - Volume level (0.0 to 1.0).
+   * @returns {this} The player instance for chaining.
    */
   setVolume(v: Volume): this {
-    this._gainNode.gain.value = v;
-
-    if (this._gainNode.gain.value > 0) {
-      this._volumeBeforeMute = v;
+    this._audioGraph.setVoulme(v);
+    
+    if (this._audioGraph.getVolume() > 0) {
+        this._volumeBeforeMute = v;
     }
 
+    this.emit("volumechange", this.getVolume()); 
     return this;
   }
 
   /**
-   *
-   * @returns
+   * Get the current volume level.
+   * @returns {Volume} Current volume level (0.0 to 1.0).
    */
   getVolume(): Volume {
-    return this._gainNode.gain.value as Volume;
+    return this._audioGraph.getVolume() as Volume;
   }
   /**
-   *
+   * Mutes the player, setting volume to 0 but retaining the previous volume level.
+   * @returns {void}
    */
   mute(): void {
-    this._volumeBeforeMute =
-      this._gainNode.gain.value > 0
-        ? (this._gainNode.gain.value as Volume)
-        : this._volumeBeforeMute;
+    const currentVolume = this._audioGraph.getVolume() as Volume;
 
-    this._gainNode.gain.value = 0;
-    this.emit("volumechange");
+    this._volumeBeforeMute =
+        currentVolume > 0
+            ? currentVolume
+            : this._volumeBeforeMute;
+
+    this._audioGraph.setVoulme(0); 
+    this.emit("volumechange", this.getVolume() );
   }
   /**
-   *
-   * @returns
+   * Checks if the player is currently muted.
+   * @returns {boolean} `true` if muted, `false` otherwise.
    */
   isMuted(): boolean {
-    return this._gainNode.gain.value === 0;
+    return this._audioGraph.getVolume() === 0;
   }
   /**
-   *
+   * Restores the volume to the level before it was muted.
+   * @returns {void}
    */
   unmute(): void {
-    this._gainNode.gain.value = this._volumeBeforeMute;
-    this.emit("volumechange");
+    this._audioGraph.setVoulme(this._volumeBeforeMute); 
+    this.emit("volumechange", this.getVolume());
   }
   /**
-   * Toggle mute state in player
-   * @example const isMuted = player.toggleMute();
-   * @returns {boolean} true if now muted, false if unmuted
+   * Toggles the mute state.
+   * @returns {boolean} `true` if now muted, `false` if unmuted.
    */
   toggleMute(): boolean {
     if (this.isMuted()) {
@@ -383,74 +395,89 @@ export class Player {
     }
   }
 
-  /**
-   * Set playback rate
-   * @example player.setPlaybackRate(1.5);
-   * @param rate
-   * @returns `this` for chaining
+/**
+   * Sets the playback rate (speed).
+   * @param {number} rate - The playback rate (e.g., 1.0 is normal, 2.0 is double speed). Must be positive.
+   * @returns {this} The player instance for chaining.
+   * @throws {RangeError} If the rate is non-positive.
    */
   setPlaybackRate(rate: number): this {
-    if (rate <= 0) throw new RangeError("Playback rate must be positive");
+if (rate <= 0) throw new RangeError("Playback rate must be positive");
+if (this._state === "playing") {
+this._timeController.setRatePlaying(this._ctx.currentTime, rate);
+} else {
+ this._timeController.setRate(rate);
+}
 
-    if (this._state === "playing") {
-      this.updatePosition();
-      this._startTime = this._ctx.currentTime;
-    }
-
-    this._playbackRate = rate;
-
-    if (this._currentSource) {
-      this._currentSource.playbackRate.value = rate;
-    }
-    this.emit("ratechange");
-    return this;
+if (this._currentSource) {
+this._currentSource.playbackRate.value = rate;
+}
+this.emit("ratechange", rate);
+return this;
   }
   /**
-   * @example const rate = player.getPlaybackRate();
-   * @returns current playback rate
+   * Gets the current playback rate.
+   * @returns {number} The current playback rate.
    */
   getPlaybackRate(): number {
-    return this._playbackRate;
+    return this._timeController.getRate();
   }
   /**
-   * Set loop mode
-   * @example player.setLoop(true);
-   * @param loop - whether to enable or disable looping
-   * @returns `this` for chaining
+   * Enables or disables track looping.
+   * @param {boolean} loop - `true` to enable looping, `false` to disable.
+   * @returns {this} The player instance for chaining.
    */
   setLoop(loop: boolean): this {
-    this._loop = loop;
+    this._timeController.setLoop(loop);
+    
     if (this._currentSource) {
       this._currentSource.loop = loop;
     }
     return this;
   }
   /**
-   *
-   * @returns boolean indicating whether looping is enabled
+   * Gets the current loop state.
+   * @returns {boolean} `true` if looping is enabled, `false` otherwise.
    */
   getLoop(): boolean {
-    return this._loop;
+    return this._timeController.getLoop();
   }
 
-  on(event: PlayerEvent, handler: Function) {
-    if (!this._events.has(event)) this._events.set(event, new Set());
-    this._events.get(event)!.add(handler);
+  on<K extends PlayerEvent>(event: K, handler: (...data: PlayerEvents[K]) => void) {
+  this._events.on(event, handler as any);
   }
 
-  off(event: PlayerEvent, handler: Function) {
-    this._events.get(event)?.delete(handler);
+  once<K extends PlayerEvent>(event: K, handler: (...data: PlayerEvents[K]) => void) {
+  this._events.once(event, handler as any);
   }
 
-  private emit(event: PlayerEvent, data?: any) {
-    this._events.get(event)?.forEach((h) => h(data));
+  off<K extends PlayerEvent>(event: K, handler?: (...data: PlayerEvents[K]) => void) {
+  this._events.off(event, handler as any);
   }
+
+  private emit<K extends PlayerEvent>(event: K, ...data: PlayerEvents[K]) {
+    this._events.emit(event, ...(data as any)); 
+  }
+
+
+
+  public setLogLevel(level: LogLevel): this {
+        playerLogger.setLevel(level);
+        return this;
+    }
   /**
-   * Dispose the player and release all resources
+   * Disposes of the player, stopping playback, cleaning up the audio graph,
+   * closing the AudioContext, and releasing resources used by mediabunny.
+   * @async
+   * @returns {Promise<void>}
    */
   async dispose() {
     await this.stop();
+    
+    this._audioGraph.dispose(); 
+
     await this._ctx.close();
     await this._input?.dispose();
+    playerLogger.info("Player disposed and all resources released.");
   }
 }
