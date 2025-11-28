@@ -1,39 +1,114 @@
+type Callback<T> = T extends void ? () => void : (payload: T) => void;
+type Unsubscribe = () => void;
 
-export class EventEmitter<EvMap extends Record<string, any>> {
-  private listeners = new Map<keyof EvMap, Set<(...payload: EvMap[keyof EvMap]) => void>>();
+export class EventEmitter<
+  TEventMap extends { [K in keyof TEventMap]: TEventMap[K] }
+> {
+  private listeners = new Map<keyof TEventMap, Set<Callback<unknown>>>();
+  private onceFlags = new WeakSet<Callback<unknown>>();
 
-  on<K extends keyof EvMap>(event: K, handler: (...payload: EvMap[K]) => void) {
-    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-    this.listeners.get(event)!.add(handler as any); 
-  }
-
-  off<K extends keyof EvMap>(event: K, handler: (...payload: EvMap[K]) => void) {
-    this.listeners.get(event)?.delete(handler as any);
-  }
-
-  once<K extends keyof EvMap>(event: K, handler: (payload: EvMap[K]) => void) {
-        const wrapper = (payload: EvMap[K]) => {
-        this.off(event, wrapper as any);
-        handler(payload);
-        };
-        this.on(event, wrapper as any);
+  on<K extends keyof TEventMap>(
+    event: K,
+    callback: Callback<TEventMap[K]>
+  ): Unsubscribe {
+    let set = this.listeners.get(event);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(event, set);
     }
 
-  emit<K extends keyof EvMap>(event: K, ...payload: EvMap[K]) {
-  console.debug(event,payload)
+    set.add(callback as Callback<unknown>);
+
+    return () => this.off(event, callback);
+  }
+
+  once<K extends keyof TEventMap>(
+    event: K,
+    callback: Callback<TEventMap[K]>
+  ): Unsubscribe {
+    const wrapper = ((payload: TEventMap[K]) => {
+      this.off(event, wrapper as Callback<TEventMap[K]>);
+      (callback as (p: TEventMap[K]) => void)(payload);
+    }) as Callback<TEventMap[K]>;
+
+    this.onceFlags.add(wrapper as Callback<unknown>);
+    return this.on(event, wrapper);
+  }
+
+  waitFor<K extends keyof TEventMap>(
+    event: K,
+    options?: { timeout?: number; signal?: AbortSignal }
+  ): Promise<TEventMap[K]> {
+    return new Promise((resolve, reject) => {
+      const { timeout, signal } = options ?? {};
+
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: Unsubscribe;
+
+      const cleanup = () => {
+        unsubscribe?.();
+        if (timeoutId) clearTimeout(timeoutId);
+        signal?.removeEventListener("abort", onAbort);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+
+      if (signal?.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+
+      signal?.addEventListener("abort", onAbort);
+
+      if (timeout && timeout > 0) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timeout waiting for event "${String(event)}"`));
+        }, timeout);
+      }
+
+      unsubscribe = this.once(event, ((payload: TEventMap[K]) => {
+        cleanup();
+        resolve(payload);
+      }) as Callback<TEventMap[K]>);
+    });
+  }
+
+  off<K extends keyof TEventMap>(
+    event: K,
+    callback?: Callback<TEventMap[K]>
+  ): void {
+    if (!callback) {
+      this.listeners.delete(event);
+      return;
+    }
 
     const set = this.listeners.get(event);
-    if (!set) return;
-    for (const h of Array.from(set)) {
+    set?.delete(callback as Callback<unknown>);
+  }
+
+  protected emit<K extends keyof TEventMap>(
+    event: K,
+    ...args: TEventMap[K] extends void ? [] : [TEventMap[K]]
+  ): void {
+    const set = this.listeners.get(event);
+    if (!set || set.size === 0) return;
+
+    const payload = args[0] as TEventMap[K];
+
+    for (const callback of [...set]) {
       try {
-        h(...payload);
+        (callback as (p: TEventMap[K]) => void)(payload);
       } catch (err) {
-        console.error(`Error in event handler for ${String(event)}:`, err);
+        console.error(`Error in "${String(event)}" handler:`, err);
       }
     }
   }
 
-  removeAll() {
+  removeAllListeners(): void {
     this.listeners.clear();
   }
 }
