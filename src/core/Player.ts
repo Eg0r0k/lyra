@@ -1,15 +1,11 @@
 import { EventEmitter } from "../core/EventEmitter";
-import { ISourceLoader, LoadResult } from "../loaders/ISourceLoader";
-import { LoaderFactory } from "../loaders/LoaderFactory";
 import { IPlaybackStrategy } from "../strategy/IPlaybackStrategy";
 import { PlayerError, PlayerErrorCode, PlayerEventMap } from "../types/events";
 import { StateManager } from "./StateManager";
 import {
   AudioSource,
   AudioSourceInput,
-  AudioSourceType,
   DEFAULT_OPTIONS,
-  HLSConfig,
   normalizeSource,
   PlaybackMode,
   PlayerOptions,
@@ -18,21 +14,19 @@ import {
 import { CancellationError, CancellationToken } from "./CancellationToken";
 import { PlaybackRate, TimeSeconds, Volume } from "../types/branded";
 import { PlayerState } from "../types";
-import { HLSLoader } from "../loaders/HLSLoader";
 import { HTML5Strategy } from "../strategy/Html5AudioStrategy";
 import { WebAudioStrategy } from "../strategy/WebAudioStrategy";
 import { AudioGraph } from "../audio/AudioGraph";
+import { ISourceHandler, SourceManager } from "../source";
 
 export class Player extends EventEmitter<PlayerEventMap> {
   private _ctx: AudioContext | null = null;
-
   private _stateManager: StateManager;
-  private _loaderFactory: LoaderFactory;
+  private _sourceManager: SourceManager;
   private _audioGraph: AudioGraph | null = null;
-  private _currentLoader: ISourceLoader | null = null;
+
   private _currentStrategy: IPlaybackStrategy | null = null;
-  private _currentSource: AudioSource | null = null;
-  private _loadResult: LoadResult | null = null;
+  private _currentHandler: ISourceHandler | null = null;
   private _cancellation: CancellationToken | null = null;
 
   private _options: Required<PlayerOptions>;
@@ -43,13 +37,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private _objectUrls: Set<string> = new Set();
 
-  constructor(options: PlayerOptions) {
+  constructor(options: PlayerOptions = {}) {
     super();
 
     this._options = { ...DEFAULT_OPTIONS, ...options };
 
     this._stateManager = new StateManager();
-    this._loaderFactory = new LoaderFactory({
+    this._sourceManager = new SourceManager({
       hlsConfig: this._options.hlsConfig,
     });
 
@@ -60,10 +54,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._stateManager.onChange(({ from, to }) => {
       this.emit("statechange", { from, to });
-      console.log(`State: ${from} -> ${to}`);
     });
   }
-
   get state(): PlayerState {
     return this._stateManager.state;
   }
@@ -119,7 +111,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async load(source: AudioSourceInput): Promise<void> {
-    const normalizedSource = normalizeSource(source);
+    const normalized = normalizeSource(source);
 
     if (this._stateManager.isDisposed) {
       throw new PlayerError(
@@ -128,6 +120,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       );
     }
 
+    // Отменяем предыдущую загрузку
     this._cancellation?.cancel();
     this._cancellation = new CancellationToken();
     const signal = this._cancellation.signal;
@@ -138,65 +131,50 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.emit("loadstart");
 
     try {
-      const preferredMode =
-        this._options.mode === "auto" ? undefined : this._options.mode;
-      this._currentLoader = this._loaderFactory.createLoader(
-        normalizedSource,
-        preferredMode
-      );
-      this._currentSource = normalizedSource;
+      // 1. Получаем обработчик
+      const handler = this._sourceManager.getHandler(normalized);
+      this._currentHandler = handler;
 
-      let strategyType = this.determineStrategy(normalizedSource);
+      // 2. Определяем стратегию
+      let strategyType =
+        this._options.mode === "auto"
+          ? this._sourceManager.recommendStrategy(normalized)
+          : this._options.mode;
 
-      if (
-        this._currentLoader.id === "native" &&
-        (normalizedSource.data instanceof File ||
-          normalizedSource.data instanceof Blob)
-      ) {
-        if (preferredMode === "html5") {
-          strategyType = "html5";
-        }
-      }
-      if (
-        this._currentLoader.id === "mediabunny" ||
-        this._currentLoader.id === "buffer"
-      ) {
-        if (strategyType === "html5") {
-          console.warn(
-            "Switching to WebAudio strategy because loader produces raw buffer"
-          );
-        }
-        strategyType = "webaudio";
+      // Проверяем совместимость с handler
+      const preferred = handler.preferredStrategy();
+      if (preferred !== "any" && preferred !== strategyType) {
+        console.warn(
+          `[Player] Source requires ${preferred} strategy, switching from ${strategyType}`
+        );
+        strategyType = preferred;
       }
 
+      // 3. Создаём стратегию
       this._currentStrategy = this.createStrategy(strategyType);
 
-      if (
-        this._currentLoader instanceof HLSLoader &&
-        this._currentStrategy instanceof HTML5Strategy
-      ) {
-        this._currentLoader.attachMedia(
-          this._currentStrategy.getAudioElement()
-        );
-      }
-
+      // 4. Подготавливаем источник
       const needsContext = strategyType === "webaudio";
       const ctx = needsContext ? this.audioContext : null;
 
-      this._loadResult = await this._currentLoader.load(
-        normalizedSource,
+      const prepared = await handler.prepare(
+        normalized,
+        this._currentStrategy,
         ctx,
         signal
       );
 
       signal.throwIfAborted();
 
-      if (this._loadResult.objectUrl) {
-        this._objectUrls.add(this._loadResult.objectUrl);
+      if (prepared.objectUrlToRevoke) {
+        this._objectUrls.add(prepared.objectUrlToRevoke);
       }
-      await this._currentStrategy!.initialize({
-        sourceUrl: this._loadResult.sourceUrl,
-        audioBuffer: this._loadResult.audioBuffer,
+
+      this._sourceManager.setActiveHandler(handler);
+
+      await this._currentStrategy.initialize({
+        sourceUrl: prepared.sourceUrl,
+        audioBuffer: prepared.audioBuffer,
         audioContext: this.audioContext,
         volume: this._volume,
         muted: this._muted,
@@ -204,6 +182,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         loop: this._loop,
         preload: this._options.preload,
       });
+
       signal.throwIfAborted();
 
       this.setupAudioGraph();
@@ -214,11 +193,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this.emit("canplay");
       this.emit("loadedmetadata", { duration: this.duration });
 
-      if (this._currentLoader.getQualityLevels) {
-        const levels = this._currentLoader.getQualityLevels();
-        if (levels.length > 0) {
-          this.emit("qualitiesavailable", levels);
-        }
+      const capabilities = this._sourceManager.getActiveCapabilities();
+      if (capabilities?.qualityLevels?.length) {
+        this.emit("qualitiesavailable", capabilities.qualityLevels);
       }
 
       if (this._options.autoplay) {
@@ -234,7 +211,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
       }
 
       this._stateManager.transition("error");
-
       const playerError = PlayerError.fromError(
         err,
         PlayerErrorCode.LOAD_DECODE
@@ -280,7 +256,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
       throw playerError;
     }
   }
-
   pause(): void {
     if (!this._currentStrategy || !this._stateManager.is("playing")) {
       return;
@@ -324,9 +299,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
   setVolume(value: number): void {
     this._volume = Volume(value);
 
-    this._currentStrategy?.setVolume(this._volume);
-    this._audioGraph?.setVolume(this._muted ? 0 : this._volume);
-
+    if (this._audioGraph) {
+      this._audioGraph.setVolume(this._muted ? 0 : this._volume);
+      this._currentStrategy?.setVolume(Volume(1));
+    } else {
+      this._currentStrategy?.setVolume(this._volume);
+    }
     this.emit("volumechange", {
       volume: this._volume,
       muted: this._muted,
@@ -336,13 +314,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
   setMuted(muted: boolean): void {
     this._muted = muted;
 
-    this._currentStrategy?.setMuted(muted);
-    this._audioGraph?.setVolume(muted ? 0 : this._volume);
+    if (this._audioGraph) {
+      this._currentStrategy?.setMuted(false);
+      this._audioGraph.setVolume(muted ? 0 : this._volume);
+    } else {
+      this._currentStrategy?.setMuted(muted);
+    }
 
-    this.emit("volumechange", {
-      volume: this._volume,
-      muted: this._muted,
-    });
+    this.emit("volumechange", { volume: this._volume, muted: this._muted });
   }
 
   toggleMute(): void {
@@ -361,11 +340,11 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   getQualityLevels(): QualityLevel[] {
-    return this._currentLoader?.getQualityLevels?.() ?? [];
+    return this._sourceManager.getActiveCapabilities()?.qualityLevels ?? [];
   }
-
   setQuality(level: number): void {
-    this._currentLoader?.setQuality?.(level);
+    const capabilities = this._sourceManager.getActiveCapabilities();
+    capabilities?.setQuality?.(level);
 
     const levels = this.getQualityLevels();
     const current = levels[level];
@@ -375,38 +354,28 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   getCurrentQuality(): number {
-    return this._currentLoader?.getCurrentQuality?.() ?? -1;
+    return (
+      this._sourceManager.getActiveCapabilities()?.getCurrentQuality?.() ?? -1
+    );
   }
 
   async dispose(): Promise<void> {
     if (this._stateManager.isDisposed) return;
 
     this._cancellation?.cancel();
-
     await this.cleanup();
 
-    // Закрываем AudioContext
-    if (this._ctx && this._ctx.state !== "closed") {
-      await this._ctx.close();
+    if (this._ctx?.state !== "closed") {
+      await this._ctx?.close();
     }
     this._ctx = null;
 
-    // Освобождаем factory
-    this._loaderFactory.dispose();
-
-    // Помечаем как disposed
+    this._audioGraph = null;
+    this._sourceManager.dispose();
     this._stateManager.dispose();
 
     this.emit("dispose");
     this.removeAllListeners();
-  }
-
-  private determineStrategy(source: AudioSource): "html5" | "webaudio" {
-    if (this._options.mode !== "auto") {
-      return this._options.mode;
-    }
-
-    return this._loaderFactory.recommendStrategy(source);
   }
 
   private createStrategy(type: "html5" | "webaudio"): IPlaybackStrategy {
@@ -429,11 +398,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
 
-    // Подключаем: source -> graph -> destination
+    //source -> graph -> destination
     sourceNode.connect(this._audioGraph.input);
     this._audioGraph.output.connect(this.audioContext.destination);
 
-    // Применяем текущую громкость
     this._audioGraph.setVolume(this._muted ? 0 : this._volume);
   }
 
@@ -479,7 +447,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._currentStrategy.on("error", (error) => {
       this._stateManager.transition("error");
-      const playerError = PlayerError.fromError(error);
+      const playerError = PlayerError.fromError(
+        error,
+        PlayerErrorCode.PLAYBACK_FAILED
+      );
       this.emit("error", {
         code: playerError.code,
         message: playerError.message,
@@ -488,32 +459,25 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
   }
   private async cleanup(): Promise<void> {
-    if (this._currentStrategy) {
-      this._currentStrategy.dispose();
-      this._currentStrategy = null;
-    }
-    if (this._currentLoader instanceof HLSLoader) {
-      this._currentLoader.detachMedia();
-    }
-    if (this._currentLoader && !(this._currentLoader instanceof HLSLoader)) {
-      this._currentLoader.dispose();
-    }
+    this._currentStrategy?.dispose();
+    this._currentStrategy = null;
 
-    this._currentLoader = null;
+    this._currentHandler?.dispose();
+    this._currentHandler = null;
+
+    this._sourceManager.clearActiveHandler();
 
     for (const url of this._objectUrls) {
       URL.revokeObjectURL(url);
     }
     this._objectUrls.clear();
 
-    this._loadResult = null;
-    this._currentSource = null;
     this._stateManager.reset();
   }
 
   static forMusic(options?: PlayerOptions): Player {
     return new Player({
-      mode: "webaudio",
+      mode: "auto",
       latencyHint: "playback",
       ...options,
     });

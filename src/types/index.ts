@@ -61,6 +61,7 @@ export interface HLSConfig {
   startLevel: number;
   autoStartLoad: boolean;
   enableWorker: boolean;
+  startFragPrefetch: boolean;
 }
 
 export interface PlayerOptions {
