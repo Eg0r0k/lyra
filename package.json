@@ -1,37 +1,59 @@
 {
-    "name": "lyra",
-    "version": "1.0.0",
-    "description": "",
-    "author": "Eg0rk",
-    "license": "MIT",
-    "type": "module",
-    "main": "./dist/index.cjs",
-    "module": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.cjs"
-        }
-    },
-    "files": [
-        "dist"
-    ],
-    "scripts": {
-        "build": "tsup src/index.ts --format esm,cjs --dts",
-        "lint": "eslint . --ext .ts,.tsx",
-        "prepublishOnly": "npm run build"
-    },
-    "peerDependencies": {
-        "mediabunny": "^1.25.1"
-    },
-    "devDependencies": {
-        "@types/node": "^25.0.3",
-        "tsup": "^8.5.1",
-        "typescript": "^5.9.3"
-    },
-    "dependencies": {
-        "hls.js": "^1.6.15"
+  "name": "@egor/lyra",
+  "version": "0.1.0",
+  "description": "Flexible audio player library with Web Audio API and HTML5 support",
+  "author": "Eg0rk",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "hls.js": "^1.4.0"
+  },
+  "peerDependenciesMeta": {
+    "hls.js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "hls.js": "^1.6.15",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "audio",
+    "player",
+    "web-audio-api",
+    "hls",
+    "streaming",
+    "music",
+    "html5-audio"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/lyra"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/lyra/issues"
+  }
 }

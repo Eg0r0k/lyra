@@ -1,10 +1,11 @@
-import { AudioSource, HLSConfig } from "../types";
+import { AudioSource, HLSConfig, HlsConstructor } from "../types";
 import { ISourceHandler, SourceCapabilities } from "./ISourceHandler";
 import { UrlHandler, BlobHandler, BufferHandler, HLSHandler } from "./handlers";
 import { PlayerError, PlayerErrorCode } from "../types/events";
 
 export interface SourceManagerOptions {
   hlsConfig?: Partial<HLSConfig>;
+  Hls?: HlsConstructor;
 }
 
 /**
@@ -22,23 +23,30 @@ export class SourceManager {
   }
 
   private registerDefaultHandlers(): void {
-    // Порядок важен — первый подходящий будет использован
-
-    // HLS — добавим в следующем коммите (опционально)
-    if (HLSHandler.isSupported()) {
-      this._handlers.push(new HLSHandler(this._options.hlsConfig));
+    // HLS — если передали Hls класс
+    if (this._options.Hls && HLSHandler.isSupported(this._options.Hls)) {
+      console.log("[SourceManager] HLS handler registered");
+      this._handlers.push(
+        new HLSHandler(this._options.hlsConfig, this._options.Hls)
+      );
+    } else {
+      console.log("[SourceManager] HLS not available (Hls class not provided)");
     }
 
-    // Buffer — для ArrayBuffer/Uint8Array
+    // Buffer
     this._handlers.push(new BufferHandler());
 
-    // Blob — для File/Blob
+    // Blob
     this._handlers.push(new BlobHandler());
 
-    // URL — fallback для обычных URL
+    // URL — fallback
     this._handlers.push(new UrlHandler());
-  }
 
+    console.log(
+      "[SourceManager] Registered handlers:",
+      this._handlers.map((h) => h.id)
+    );
+  }
   /**
    * Регистрирует кастомный handler (добавляется в начало списка)
    */
@@ -49,9 +57,15 @@ export class SourceManager {
   /**
    * Находит подходящий обработчик для источника
    */
+
   getHandler(source: AudioSource): ISourceHandler {
+    console.log("[SourceManager] Looking for handler for:", source);
+
     for (const handler of this._handlers) {
-      if (handler.canHandle(source)) {
+      const canHandle = handler.canHandle(source);
+      console.log(`[SourceManager] ${handler.id}.canHandle:`, canHandle);
+
+      if (canHandle) {
         return handler;
       }
     }
@@ -61,7 +75,6 @@ export class SourceManager {
       PlayerErrorCode.LOAD_NOT_SUPPORTED
     );
   }
-
   /**
    * Определяет рекомендуемую стратегию для источника
    */

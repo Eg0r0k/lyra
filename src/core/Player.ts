@@ -3,9 +3,9 @@ import { IPlaybackStrategy } from "../strategy/IPlaybackStrategy";
 import { PlayerError, PlayerErrorCode, PlayerEventMap } from "../types/events";
 import { StateManager } from "./StateManager";
 import {
-  AudioSource,
   AudioSourceInput,
   DEFAULT_OPTIONS,
+  HlsConstructor,
   normalizeSource,
   PlaybackMode,
   PlayerOptions,
@@ -19,6 +19,10 @@ import { WebAudioStrategy } from "../strategy/WebAudioStrategy";
 import { AudioGraph } from "../audio/AudioGraph";
 import { ISourceHandler, SourceManager } from "../source";
 
+type ResolvedPlayerOptions = Required<Omit<PlayerOptions, "Hls">> & {
+  Hls?: HlsConstructor;
+};
+
 export class Player extends EventEmitter<PlayerEventMap> {
   private _ctx: AudioContext | null = null;
   private _stateManager: StateManager;
@@ -29,7 +33,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private _currentHandler: ISourceHandler | null = null;
   private _cancellation: CancellationToken | null = null;
 
-  private _options: Required<PlayerOptions>;
+  private _options: ResolvedPlayerOptions;
   private _volume: Volume;
   private _muted: boolean;
   private _playbackRate: PlaybackRate;
@@ -45,8 +49,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._stateManager = new StateManager();
     this._sourceManager = new SourceManager({
       hlsConfig: this._options.hlsConfig,
+      Hls: this._options.Hls,
     });
-
     this._volume = Volume(this._options.volume);
     this._muted = this._options.muted;
     this._playbackRate = PlaybackRate(this._options.playbackRate);

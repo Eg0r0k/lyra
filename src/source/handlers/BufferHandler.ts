@@ -22,7 +22,7 @@ export class BufferHandler implements ISourceHandler {
 
   async prepare(
     source: AudioSource,
-    strategy: IPlaybackStrategy,
+    _strategy: IPlaybackStrategy,
     ctx: AudioContext | null,
     signal: AbortSignal
   ): Promise<PreparedSource> {

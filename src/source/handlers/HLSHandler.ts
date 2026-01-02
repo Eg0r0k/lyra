@@ -3,6 +3,8 @@ import {
   HLSConfig,
   QualityLevel,
   DEFAULT_OPTIONS,
+  HlsInstance,
+  HlsConstructor,
 } from "../../types";
 import {
   ISourceHandler,
@@ -13,63 +15,40 @@ import { PlayerError, PlayerErrorCode } from "../../types/events";
 import { IPlaybackStrategy } from "../../strategy/IPlaybackStrategy";
 import { HTML5Strategy } from "../../strategy/Html5AudioStrategy";
 
-// Типы для hls.js (чтобы не тянуть зависимость напрямую)
-interface HlsInterface {
-  loadSource(url: string): void;
-  attachMedia(element: HTMLMediaElement): void;
-  destroy(): void;
-  currentLevel: number;
-  levels: Array<{ bitrate: number; audioCodec?: string }>;
-  on(event: string, callback: (...args: any[]) => void): void;
-}
-
-interface HlsStatic {
-  new (config?: Record<string, unknown>): HlsInterface;
-  isSupported(): boolean;
-  Events: Record<string, string>;
-  ErrorTypes: Record<string, string>;
-}
-
-/**
- * Обработчик для HLS потоков.
- * Требует hls.js как peer dependency.
- */
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
 
-  private _hls: HlsInterface | null = null;
-  private _Hls: HlsStatic | null = null;
+  private _hls: HlsInstance | null = null;
+  private _Hls: HlsConstructor | null;
   private _config: Partial<HLSConfig>;
   private _qualityLevels: QualityLevel[] = [];
-  private _attachedElement: HTMLAudioElement | null = null;
 
-  constructor(config?: Partial<HLSConfig>) {
+  constructor(config?: Partial<HLSConfig>, HlsClass?: HlsConstructor) {
     this._config = config ?? DEFAULT_OPTIONS.hlsConfig;
-    this.loadHlsLibrary();
-  }
+    this._Hls = HlsClass ?? null;
 
-  private loadHlsLibrary(): void {
-    try {
-      // Динамический импорт для опциональной зависимости
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      this._Hls = require("hls.js") as HlsStatic;
-    } catch {
-      this._Hls = null;
+    if (this._Hls) {
+      console.log("[HLSHandler] Hls class provided");
+    } else {
+      console.log("[HLSHandler] No Hls class provided");
     }
   }
 
-  static isSupported(): boolean {
+  static isSupported(HlsClass?: HlsConstructor): boolean {
+    if (!HlsClass) return false;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Hls = require("hls.js") as HlsStatic;
-      return Hls.isSupported();
+      return HlsClass.isSupported();
     } catch {
       return false;
     }
   }
 
   canHandle(source: AudioSource): boolean {
-    if (!this._Hls || !this._Hls.isSupported()) {
+    if (!this._Hls) {
+      return false;
+    }
+
+    if (!this._Hls.isSupported()) {
       return false;
     }
 
@@ -80,7 +59,7 @@ export class HLSHandler implements ISourceHandler {
   }
 
   preferredStrategy(): "html5" | "webaudio" | "any" {
-    return "html5"; // HLS работает ТОЛЬКО с HTMLAudioElement
+    return "html5";
   }
 
   async prepare(
@@ -91,7 +70,7 @@ export class HLSHandler implements ISourceHandler {
   ): Promise<PreparedSource> {
     if (!this._Hls) {
       throw new PlayerError(
-        "hls.js is not installed. Install it with: npm install hls.js",
+        "HLS class not provided. Pass Hls class to Player options.",
         PlayerErrorCode.LOAD_NOT_SUPPORTED
       );
     }
@@ -122,16 +101,10 @@ export class HLSHandler implements ISourceHandler {
     });
 
     const audioElement = strategy.getAudioElement();
-    this._attachedElement = audioElement;
+    const Hls = this._Hls;
+    const hls = this._hls;
 
     return new Promise<PreparedSource>((resolve, reject) => {
-      if (!this._hls || !this._Hls) {
-        return reject(new Error("HLS not initialized"));
-      }
-
-      const Hls = this._Hls;
-      const hls = this._hls;
-
       const onAbort = () => {
         reject(new DOMException("Aborted", "AbortError"));
         this.cleanup();
@@ -152,7 +125,7 @@ export class HLSHandler implements ISourceHandler {
         }
       };
 
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event: string, data: any) => {
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event: unknown, data: any) => {
         manifestParsed = true;
         this._qualityLevels = data.levels.map((lvl: any, index: number) => ({
           index,
@@ -175,7 +148,7 @@ export class HLSHandler implements ISourceHandler {
         }
       });
 
-      hls.on(Hls.Events.ERROR, (_event: string, data: any) => {
+      hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
         if (data.fatal) {
           signal.removeEventListener("abort", onAbort);
 
@@ -227,7 +200,6 @@ export class HLSHandler implements ISourceHandler {
       this._hls.destroy();
       this._hls = null;
     }
-    this._attachedElement = null;
     this._qualityLevels = [];
   }
 
