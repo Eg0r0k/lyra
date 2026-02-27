@@ -402,11 +402,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
 
-    //source -> graph -> destination
+    // source -> graph input
     sourceNode.connect(this._audioGraph.input);
-    this._audioGraph.output.connect(this.audioContext.destination);
 
+    this._audioGraph.output.connect(this.audioContext.destination);
     this._audioGraph.setVolume(this._muted ? 0 : this._volume);
+    this._currentStrategy.setVolume(Volume(1));
   }
 
   private bindStrategyEvents(): void {

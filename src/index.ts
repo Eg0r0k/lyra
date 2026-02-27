@@ -35,7 +35,6 @@ export { HLSHandler } from "./source/handlers/HLSHandler";
 export { AudioGraph } from "./audio/AudioGraph";
 
 // ============ Types ============
-// Из types/index.ts - разделяем типы и значения
 export type {
   PlayerState,
   PlaybackMode,
@@ -50,7 +49,6 @@ export type {
 
 export { normalizeSource, DEFAULT_OPTIONS } from "./types";
 
-// Из types/branded.ts
 export type { Volume, TimeSeconds, PlaybackRate } from "./types/branded";
 export {
   Volume as createVolume,
@@ -58,7 +56,6 @@ export {
   PlaybackRate as createPlaybackRate,
 } from "./types/branded";
 
-// Из types/events.ts
 export type {
   TimeUpdatePayload,
   VolumeChangePayload,

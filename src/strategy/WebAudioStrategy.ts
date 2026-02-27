@@ -51,7 +51,7 @@ export class WebAudioStrategy
     if (!options.audioContext) {
       throw new PlayerError(
         "WebAudioStrategy requires AudioContext",
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
     }
 
@@ -73,18 +73,18 @@ export class WebAudioStrategy
             error instanceof Error ? error.message : String(error)
           }`,
           PlayerErrorCode.PLAYBACK_FAILED,
-          error
+          error,
         );
       }
     } else if (options.sourceUrl) {
       throw new PlayerError(
         "WebAudioStrategy requires audioBuffer, not sourceUrl",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     } else {
       throw new PlayerError(
         "WebAudioStrategy requires audioBuffer",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
 
@@ -96,7 +96,7 @@ export class WebAudioStrategy
     if (!this._ctx || !this._audioBuffer || !this._gainNode) {
       throw new PlayerError(
         "WebAudioStrategy not initialized",
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
     }
 
@@ -136,7 +136,7 @@ export class WebAudioStrategy
         throw new PlayerError(
           "Playback not allowed. User interaction required.",
           PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
-          error
+          error,
         );
       }
 
@@ -145,7 +145,7 @@ export class WebAudioStrategy
           error instanceof Error ? error.message : String(error)
         }`,
         PlayerErrorCode.PLAYBACK_FAILED,
-        error
+        error,
       );
     }
   }
@@ -178,9 +178,10 @@ export class WebAudioStrategy
     this._pausedAt = Math.max(0, Math.min(time, this.duration));
 
     if (wasPlaying) {
-      this.play();
+      this.play().catch((err) => {
+        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      });
     }
-
     this.emit("timeupdate", TimeSeconds(this._pausedAt));
   }
 
@@ -238,7 +239,7 @@ export class WebAudioStrategy
     if (!this._gainNode) {
       throw new PlayerError(
         "WebAudioStrategy not initialized",
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
     }
     return this._gainNode;
@@ -263,7 +264,7 @@ export class WebAudioStrategy
 
   on<K extends keyof PlaybackStrategyEvents>(
     event: K,
-    callback: (data: PlaybackStrategyEvents[K]) => void
+    callback: (data: PlaybackStrategyEvents[K]) => void,
   ): () => void {
     return super.on(event, callback as any);
   }

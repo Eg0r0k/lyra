@@ -28,9 +28,9 @@ export class HLSHandler implements ISourceHandler {
     this._Hls = HlsClass ?? null;
 
     if (this._Hls) {
-      console.log("[HLSHandler] Hls class provided");
+      // noop
     } else {
-      console.log("[HLSHandler] No Hls class provided");
+      console.error("[HLSHandler] No Hls class provided");
     }
   }
 
@@ -66,19 +66,19 @@ export class HLSHandler implements ISourceHandler {
     source: AudioSource,
     strategy: IPlaybackStrategy,
     _ctx: AudioContext | null,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<PreparedSource> {
     if (!this._Hls) {
       throw new PlayerError(
         "HLS class not provided. Pass Hls class to Player options.",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
 
     if (!(strategy instanceof HTML5Strategy)) {
       throw new PlayerError(
         "HLS requires HTML5Strategy",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
 
@@ -86,7 +86,7 @@ export class HLSHandler implements ISourceHandler {
     if (!url) {
       throw new PlayerError(
         "HLSHandler requires a URL",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
 
@@ -151,7 +151,7 @@ export class HLSHandler implements ISourceHandler {
       hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
         if (data.fatal) {
           signal.removeEventListener("abort", onAbort);
-
+          this.cleanup();
           let code = PlayerErrorCode.HLS_FATAL;
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
             code = PlayerErrorCode.HLS_NETWORK;
@@ -163,8 +163,8 @@ export class HLSHandler implements ISourceHandler {
             new PlayerError(
               `HLS Error: ${data.type} - ${data.details}`,
               code,
-              data
-            )
+              data,
+            ),
           );
         }
       });
