@@ -60,6 +60,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this.emit("statechange", { from, to });
     });
   }
+
   get state(): PlayerState {
     return this._stateManager.state;
   }
@@ -96,6 +97,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._stateManager.isPlayable;
   }
 
+  get isFading(): boolean {
+    return this._audioGraph?.isFading ?? false;
+  }
+
   get mode(): PlaybackMode {
     if (!this._currentStrategy) return "auto";
     return this._currentStrategy.id;
@@ -120,11 +125,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
     if (this._stateManager.isDisposed) {
       throw new PlayerError(
         "Player is disposed",
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
     }
 
-    // Отменяем предыдущую загрузку
     this._cancellation?.cancel();
     this._cancellation = new CancellationToken();
     const signal = this._cancellation.signal;
@@ -135,29 +139,24 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.emit("loadstart");
 
     try {
-      // 1. Получаем обработчик
       const handler = this._sourceManager.getHandler(normalized);
       this._currentHandler = handler;
 
-      // 2. Определяем стратегию
       let strategyType =
         this._options.mode === "auto"
           ? this._sourceManager.recommendStrategy(normalized)
           : this._options.mode;
 
-      // Проверяем совместимость с handler
       const preferred = handler.preferredStrategy();
       if (preferred !== "any" && preferred !== strategyType) {
         console.warn(
-          `[Player] Source requires ${preferred} strategy, switching from ${strategyType}`
+          `[Player] Source requires ${preferred} strategy, switching from ${strategyType}`,
         );
         strategyType = preferred;
       }
 
-      // 3. Создаём стратегию
       this._currentStrategy = this.createStrategy(strategyType);
 
-      // 4. Подготавливаем источник
       const needsContext = strategyType === "webaudio";
       const ctx = needsContext ? this.audioContext : null;
 
@@ -165,7 +164,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         normalized,
         this._currentStrategy,
         ctx,
-        signal
+        signal,
       );
 
       signal.throwIfAborted();
@@ -217,7 +216,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._stateManager.transition("error");
       const playerError = PlayerError.fromError(
         err,
-        PlayerErrorCode.LOAD_DECODE
+        PlayerErrorCode.LOAD_DECODE,
       );
       this.emit("error", {
         code: playerError.code,
@@ -232,7 +231,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     if (!this._currentStrategy) {
       throw new PlayerError(
         "Nothing to play. Call load() first.",
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
     }
 
@@ -250,7 +249,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     } catch (error) {
       const playerError = PlayerError.fromError(
         error,
-        PlayerErrorCode.PLAYBACK_NOT_ALLOWED
+        PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
       );
       this.emit("error", {
         code: playerError.code,
@@ -260,6 +259,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       throw playerError;
     }
   }
+
   pause(): void {
     if (!this._currentStrategy || !this._stateManager.is("playing")) {
       return;
@@ -343,9 +343,51 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._currentStrategy?.setLoop(loop);
   }
 
+  async fadeTo(volume: number, durationSec: number = 1): Promise<void> {
+    if (!this._audioGraph) return;
+    await this._audioGraph.fadeTo(
+      Math.max(0, Math.min(1, volume)),
+      durationSec,
+    );
+  }
+
+  async fadeIn(durationSec: number = 1): Promise<void> {
+    if (!this._audioGraph || !this._currentStrategy) return;
+
+    if (!this.isPlaying) {
+      await this._audioGraph.fadeTo(0, 0);
+      await this.play();
+    }
+
+    const targetVol = this._muted ? 0 : this._volume;
+    await this._audioGraph.fadeTo(targetVol, durationSec, 0);
+  }
+
+  async fadeOut(durationSec: number = 1): Promise<void> {
+    if (!this._audioGraph) return;
+    await this._audioGraph.fadeTo(0, durationSec);
+  }
+
+  async fadeOutAndPause(durationSec: number = 1): Promise<void> {
+    await this.fadeOut(durationSec);
+    this.pause();
+    void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
+  }
+
+  async fadeOutAndStop(durationSec: number = 1): Promise<void> {
+    await this.fadeOut(durationSec);
+    this.stop();
+    void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
+  }
+
+  cancelFade(): void {
+    this._audioGraph?.cancelFade();
+  }
+
   getQualityLevels(): QualityLevel[] {
     return this._sourceManager.getActiveCapabilities()?.qualityLevels ?? [];
   }
+
   setQuality(level: number): void {
     const capabilities = this._sourceManager.getActiveCapabilities();
     capabilities?.setQuality?.(level);
@@ -374,6 +416,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
     this._ctx = null;
 
+    this._audioGraph?.dispose();
     this._audioGraph = null;
     this._sourceManager.dispose();
     this._stateManager.dispose();
@@ -402,7 +445,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
 
-    // source -> graph input
     sourceNode.connect(this._audioGraph.input);
 
     this._audioGraph.output.connect(this.audioContext.destination);
@@ -454,7 +496,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._stateManager.transition("error");
       const playerError = PlayerError.fromError(
         error,
-        PlayerErrorCode.PLAYBACK_FAILED
+        PlayerErrorCode.PLAYBACK_FAILED,
       );
       this.emit("error", {
         code: playerError.code,
@@ -463,7 +505,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
       });
     });
   }
+
   private async cleanup(): Promise<void> {
+    this._audioGraph?.cancelFade();
+
     this._currentStrategy?.dispose();
     this._currentStrategy = null;
 

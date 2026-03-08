@@ -32,6 +32,9 @@ export class AudioGraph {
   private _freqDataArray: Uint8Array<ArrayBuffer>;
   private _timeDataArray: Uint8Array<ArrayBuffer>;
 
+  private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
+  private _fadeResolve: (() => void) | null = null;
+
   constructor(ctx: AudioContext, bands?: EQBand[]) {
     this._ctx = ctx;
     this._bands = bands ?? [...DEFAULT_EQ_BANDS];
@@ -42,11 +45,11 @@ export class AudioGraph {
     this._analyser.fftSize = 2048;
 
     this._freqDataArray = new Uint8Array(
-      this._analyser.frequencyBinCount
+      this._analyser.frequencyBinCount,
     ) as Uint8Array<ArrayBuffer>;
 
     this._timeDataArray = new Uint8Array(
-      this._analyser.fftSize
+      this._analyser.fftSize,
     ) as Uint8Array<ArrayBuffer>;
 
     this.createEQFilters();
@@ -67,6 +70,10 @@ export class AudioGraph {
 
   get bands(): EQBand[] {
     return this._bands;
+  }
+
+  get isFading(): boolean {
+    return this._fadeTimer !== null;
   }
 
   private createEQFilters(): void {
@@ -144,11 +151,65 @@ export class AudioGraph {
   }
 
   setVolume(volume: number): void {
+    this.cancelFade();
     this._outputGain.gain.setTargetAtTime(
       Math.max(0, Math.min(1, volume)),
       this._ctx.currentTime,
-      0.015
+      0.015,
     );
+  }
+
+  fadeTo(
+    targetVolume: number,
+    durationSec: number,
+    fromVolume?: number,
+  ): Promise<void> {
+    this.cancelFade();
+
+    const now = this._ctx.currentTime;
+    const gain = this._outputGain.gain;
+    const clamped = Math.max(0, Math.min(1, targetVolume));
+
+    gain.cancelScheduledValues(now);
+
+    if (durationSec <= 0) {
+      gain.setValueAtTime(clamped, now);
+      return Promise.resolve();
+    }
+
+    const startValue =
+      fromVolume !== undefined
+        ? Math.max(0, Math.min(1, fromVolume))
+        : gain.value;
+
+    gain.setValueAtTime(startValue, now);
+    gain.linearRampToValueAtTime(clamped, now + durationSec);
+
+    return new Promise<void>((resolve) => {
+      this._fadeResolve = resolve;
+      this._fadeTimer = setTimeout(() => {
+        this._fadeTimer = null;
+        this._fadeResolve = null;
+        resolve();
+      }, durationSec * 1000);
+    });
+  }
+
+  cancelFade(): void {
+    if (this._fadeTimer !== null) {
+      clearTimeout(this._fadeTimer);
+      this._fadeTimer = null;
+    }
+
+    const resolve = this._fadeResolve;
+    this._fadeResolve = null;
+
+    if (resolve) {
+      const now = this._ctx.currentTime;
+      this._outputGain.gain.cancelScheduledValues(now);
+      this._outputGain.gain.setValueAtTime(this._outputGain.gain.value, now);
+      resolve();
+    }
   }
 
   getFrequencyData(): Uint8Array {
@@ -162,6 +223,7 @@ export class AudioGraph {
   }
 
   dispose(): void {
+    this.cancelFade();
     this._inputGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
