@@ -1,6 +1,6 @@
 {
   "name": "lyra-audio",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Flexible audio player library with Web Audio API and HTML5 support",
   "author": "Eg0rk",
   "license": "MIT",
