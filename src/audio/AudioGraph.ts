@@ -35,6 +35,8 @@ export class AudioGraph {
   private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private _fadeResolve: (() => void) | null = null;
 
+  private static readonly SILENCE_GAIN = 1e-4;
+
   constructor(ctx: AudioContext, bands?: EQBand[]) {
     this._ctx = ctx;
     this._bands = bands ?? [...DEFAULT_EQ_BANDS];
@@ -168,28 +170,37 @@ export class AudioGraph {
 
     const now = this._ctx.currentTime;
     const gain = this._outputGain.gain;
-    const clamped = Math.max(0, Math.min(1, targetVolume));
+    const clamped = Math.max(
+      AudioGraph.SILENCE_GAIN,
+      Math.min(1, targetVolume),
+    );
 
     gain.cancelScheduledValues(now);
 
     if (durationSec <= 0) {
-      gain.setValueAtTime(clamped, now);
+      gain.setValueAtTime(
+        targetVolume <= AudioGraph.SILENCE_GAIN ? 0 : clamped,
+        now,
+      );
       return Promise.resolve();
     }
 
     const startValue =
       fromVolume !== undefined
-        ? Math.max(0, Math.min(1, fromVolume))
-        : gain.value;
+        ? Math.max(AudioGraph.SILENCE_GAIN, Math.min(1, fromVolume))
+        : Math.max(AudioGraph.SILENCE_GAIN, gain.value);
 
     gain.setValueAtTime(startValue, now);
-    gain.linearRampToValueAtTime(clamped, now + durationSec);
+    gain.exponentialRampToValueAtTime(clamped, now + durationSec);
 
     return new Promise<void>((resolve) => {
       this._fadeResolve = resolve;
       this._fadeTimer = setTimeout(() => {
         this._fadeTimer = null;
         this._fadeResolve = null;
+        if (targetVolume <= AudioGraph.SILENCE_GAIN) {
+          gain.setValueAtTime(0, this._ctx.currentTime);
+        }
         resolve();
       }, durationSec * 1000);
     });
