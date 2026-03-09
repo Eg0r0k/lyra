@@ -55,12 +55,31 @@ export function normalizeSource(input: AudioSourceInput): AudioSource {
   return input;
 }
 
+export interface HlsConstructor {
+  new (config?: Record<string, unknown>): HlsInstance;
+  isSupported(): boolean;
+  Events: Record<string, string>;
+  ErrorTypes: Record<string, string>;
+}
+
+export interface HlsInstance {
+  loadSource(url: string): void;
+  attachMedia(element: HTMLMediaElement): void;
+  detachMedia(): void;
+  destroy(): void;
+  currentLevel: number;
+  levels: Array<{ bitrate: number; audioCodec?: string }>;
+  on(event: string, callback: (...args: unknown[]) => void): void;
+  off(event: string, callback: (...args: unknown[]) => void): void;
+}
+
 export interface HLSConfig {
   maxBufferLength: number;
   maxMaxBufferLength: number;
   startLevel: number;
   autoStartLoad: boolean;
   enableWorker: boolean;
+  startFragPrefetch: boolean;
 }
 
 export interface PlayerOptions {
@@ -71,13 +90,14 @@ export interface PlayerOptions {
   loop?: boolean;
   playbackRate?: number;
   autoplay?: boolean;
-
   preload?: "none" | "metadata" | "auto";
-
   hlsConfig?: Partial<HLSConfig>;
-}
 
-export const DEFAULT_OPTIONS: Required<PlayerOptions> = {
+  Hls?: HlsConstructor;
+}
+export const DEFAULT_OPTIONS: Required<Omit<PlayerOptions, "Hls">> & {
+  Hls?: HlsConstructor;
+} = {
   mode: "auto",
   latencyHint: "interactive",
   volume: 1,
@@ -86,7 +106,6 @@ export const DEFAULT_OPTIONS: Required<PlayerOptions> = {
   playbackRate: 1,
   autoplay: false,
   preload: "auto",
-
   hlsConfig: {
     maxBufferLength: 30,
     maxMaxBufferLength: 60,
@@ -94,4 +113,5 @@ export const DEFAULT_OPTIONS: Required<PlayerOptions> = {
     autoStartLoad: true,
     enableWorker: true,
   },
+  Hls: undefined,
 };

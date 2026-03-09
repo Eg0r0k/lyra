@@ -5,6 +5,7 @@ import {
 } from "./IPlaybackStrategy";
 import { PlaybackRate, TimeSeconds, Volume } from "../types/branded";
 import { EventEmitter } from "../core/EventEmitter";
+import { PlayerError, PlayerErrorCode } from "../types/events";
 
 export class WebAudioStrategy
   extends EventEmitter<PlaybackStrategyEvents>
@@ -47,6 +48,13 @@ export class WebAudioStrategy
   }
 
   async initialize(options: StrategyInitOptions): Promise<void> {
+    if (!options.audioContext) {
+      throw new PlayerError(
+        "WebAudioStrategy requires AudioContext",
+        PlayerErrorCode.PLAYBACK_FAILED,
+      );
+    }
+
     this._ctx = options.audioContext;
     this._volume = options.volume;
     this._muted = options.muted;
@@ -55,50 +63,91 @@ export class WebAudioStrategy
 
     if (options.audioBuffer) {
       this._audioBuffer = options.audioBuffer;
-      this._gainNode = this._ctx.createGain();
-      this._gainNode.gain.value = this._muted ? 0 : this._volume;
+
+      try {
+        this._gainNode = this._ctx.createGain();
+        this._gainNode.gain.value = this._muted ? 0 : this._volume;
+      } catch (error) {
+        throw new PlayerError(
+          `Failed to create audio nodes: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          PlayerErrorCode.PLAYBACK_FAILED,
+          error,
+        );
+      }
     } else if (options.sourceUrl) {
-      throw new Error("WebAudioStrategy requires audioBuffer");
+      throw new PlayerError(
+        "WebAudioStrategy requires audioBuffer, not sourceUrl",
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
+      );
+    } else {
+      throw new PlayerError(
+        "WebAudioStrategy requires audioBuffer",
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
+      );
     }
+
     this._isReady = true;
     this.emit("durationchange", this.duration);
   }
 
   async play(): Promise<void> {
     if (!this._ctx || !this._audioBuffer || !this._gainNode) {
-      throw new Error("WebAudioStrategy not initialized");
+      throw new PlayerError(
+        "WebAudioStrategy not initialized",
+        PlayerErrorCode.PLAYBACK_FAILED,
+      );
     }
 
     if (this._isPlaying) return;
-    this._sourceNode = this._ctx.createBufferSource();
-    this._sourceNode.buffer = this._audioBuffer;
-    this._sourceNode.loop = this._loop;
-    this._sourceNode.playbackRate.value = this._playbackRate;
+    try {
+      this._sourceNode = this._ctx.createBufferSource();
+      this._sourceNode.buffer = this._audioBuffer;
+      this._sourceNode.loop = this._loop;
+      this._sourceNode.playbackRate.value = this._playbackRate;
 
-    // source -> gain
-    this._sourceNode.connect(this._gainNode);
+      // source -> gain
+      this._sourceNode.connect(this._gainNode);
 
-    this._sourceNode.onended = () => {
-      if (this._isPlaying) {
-        this._isPlaying = false;
-        this.stopTimeUpdate();
+      this._sourceNode.onended = () => {
+        if (this._isPlaying) {
+          this._isPlaying = false;
+          this.stopTimeUpdate();
 
-        if (!this._loop) {
-          this._pausedAt = 0;
-          this.emit("ended");
+          if (!this._loop) {
+            this._pausedAt = 0;
+            this.emit("ended");
+          }
         }
+      };
+
+      const offset = this._pausedAt;
+      this._startTime = this._ctx.currentTime;
+      this._startOffset = offset;
+
+      this._sourceNode.start(0, offset);
+      this._isPlaying = true;
+
+      this.startTimeUpdate();
+      this.emit("play");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        throw new PlayerError(
+          "Playback not allowed. User interaction required.",
+          PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
+          error,
+        );
       }
-    };
 
-    const offset = this._pausedAt;
-    this._startTime = this._ctx.currentTime;
-    this._startOffset = offset;
-
-    this._sourceNode.start(0, offset);
-    this._isPlaying = true;
-
-    this.startTimeUpdate();
-    this.emit("play");
+      throw new PlayerError(
+        `Playback failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        PlayerErrorCode.PLAYBACK_FAILED,
+        error,
+      );
+    }
   }
 
   pause(): void {
@@ -129,9 +178,10 @@ export class WebAudioStrategy
     this._pausedAt = Math.max(0, Math.min(time, this.duration));
 
     if (wasPlaying) {
-      this.play();
+      this.play().catch((err) => {
+        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      });
     }
-
     this.emit("timeupdate", TimeSeconds(this._pausedAt));
   }
 
@@ -187,11 +237,13 @@ export class WebAudioStrategy
 
   connectToGraph(_ctx: AudioContext): AudioNode {
     if (!this._gainNode) {
-      throw new Error("WebAudioStrategy not initialized");
+      throw new PlayerError(
+        "WebAudioStrategy not initialized",
+        PlayerErrorCode.PLAYBACK_FAILED,
+      );
     }
     return this._gainNode;
   }
-
   private startTimeUpdate(): void {
     const update = () => {
       if (!this._isPlaying) return;
@@ -212,7 +264,7 @@ export class WebAudioStrategy
 
   on<K extends keyof PlaybackStrategyEvents>(
     event: K,
-    callback: (data: PlaybackStrategyEvents[K]) => void
+    callback: (data: PlaybackStrategyEvents[K]) => void,
   ): () => void {
     return super.on(event, callback as any);
   }

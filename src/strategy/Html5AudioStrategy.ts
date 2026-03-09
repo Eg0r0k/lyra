@@ -14,7 +14,6 @@ export class HTML5Strategy
 
   private _audio: HTMLAudioElement;
   private _sourceNode: MediaElementAudioSourceNode | null = null;
-  private _ctx: AudioContext | null = null;
   private _isReady = false;
 
   constructor() {
@@ -36,8 +35,6 @@ export class HTML5Strategy
   }
 
   async initialize(options: StrategyInitOptions): Promise<void> {
-    this._ctx = options.audioContext;
-
     this._audio.volume = options.volume;
     this._audio.muted = options.muted;
     this._audio.playbackRate = options.playbackRate;

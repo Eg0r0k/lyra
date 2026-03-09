@@ -4,6 +4,7 @@ export interface EQBand {
   Q: number;
   type: BiquadFilterType;
 }
+
 const DEFAULT_EQ_BANDS: EQBand[] = [
   { frequency: 32, gain: 0, Q: 1, type: "lowshelf" },
   { frequency: 64, gain: 0, Q: 1, type: "peaking" },
@@ -16,6 +17,7 @@ const DEFAULT_EQ_BANDS: EQBand[] = [
   { frequency: 8000, gain: 0, Q: 1, type: "peaking" },
   { frequency: 16000, gain: 0, Q: 1, type: "highshelf" },
 ];
+
 export class AudioGraph {
   private _ctx: AudioContext;
 
@@ -27,15 +29,30 @@ export class AudioGraph {
   private _eqEnabled = true;
   private _bands: EQBand[];
 
+  private _freqDataArray: Uint8Array<ArrayBuffer>;
+  private _timeDataArray: Uint8Array<ArrayBuffer>;
+
+  private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
+  private _fadeResolve: (() => void) | null = null;
+
   constructor(ctx: AudioContext, bands?: EQBand[]) {
     this._ctx = ctx;
     this._bands = bands ?? [...DEFAULT_EQ_BANDS];
     this._inputGain = ctx.createGain();
     this._outputGain = ctx.createGain();
+
     this._analyser = ctx.createAnalyser();
     this._analyser.fftSize = 2048;
-    this.createEQFilters();
 
+    this._freqDataArray = new Uint8Array(
+      this._analyser.frequencyBinCount,
+    ) as Uint8Array<ArrayBuffer>;
+
+    this._timeDataArray = new Uint8Array(
+      this._analyser.fftSize,
+    ) as Uint8Array<ArrayBuffer>;
+
+    this.createEQFilters();
     this.connectChain();
   }
 
@@ -55,6 +72,10 @@ export class AudioGraph {
     return this._bands;
   }
 
+  get isFading(): boolean {
+    return this._fadeTimer !== null;
+  }
+
   private createEQFilters(): void {
     this._eqFilters = this._bands.map((band) => {
       const filter = this._ctx.createBiquadFilter();
@@ -69,9 +90,9 @@ export class AudioGraph {
   private connectChain(): void {
     this._inputGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
+    this._analyser.disconnect();
 
-    if (this._eqEnabled && this._eqFilters.length > 0) {
-      // input -> filters -> analyser -> output
+    if (this._eqFilters.length > 0) {
       this._inputGain.connect(this._eqFilters[0]);
 
       for (let i = 0; i < this._eqFilters.length - 1; i++) {
@@ -80,7 +101,6 @@ export class AudioGraph {
 
       this._eqFilters[this._eqFilters.length - 1].connect(this._analyser);
     } else {
-      // input -> analyser -> output (bypass EQ)
       this._inputGain.connect(this._analyser);
     }
 
@@ -91,8 +111,12 @@ export class AudioGraph {
     if (index < 0 || index >= this._eqFilters.length) return;
 
     this._bands[index].gain = gain;
-    this._eqFilters[index].gain.setValueAtTime(gain, this._ctx.currentTime);
+
+    if (this._eqEnabled) {
+      this._eqFilters[index].gain.setValueAtTime(gain, this._ctx.currentTime);
+    }
   }
+
   setEQBands(gains: number[]): void {
     gains.forEach((gain, i) => this.setEQBand(i, gain));
   }
@@ -104,15 +128,22 @@ export class AudioGraph {
   resetEQ(): void {
     this._bands.forEach((band, i) => {
       band.gain = 0;
-      this._eqFilters[i].gain.setValueAtTime(0, this._ctx.currentTime);
+      if (this._eqEnabled) {
+        this._eqFilters[i].gain.setValueAtTime(0, this._ctx.currentTime);
+      }
     });
   }
 
   setEQEnabled(enabled: boolean): void {
     if (this._eqEnabled === enabled) return;
-
     this._eqEnabled = enabled;
-    this.connectChain();
+
+    const now = this._ctx.currentTime;
+
+    this._bands.forEach((band, i) => {
+      const targetGain = enabled ? band.gain : 0;
+      this._eqFilters[i].gain.setTargetAtTime(targetGain, now, 0.015);
+    });
   }
 
   get eqEnabled(): boolean {
@@ -120,25 +151,79 @@ export class AudioGraph {
   }
 
   setVolume(volume: number): void {
-    this._outputGain.gain.setValueAtTime(
+    this.cancelFade();
+    this._outputGain.gain.setTargetAtTime(
       Math.max(0, Math.min(1, volume)),
-      this._ctx.currentTime
+      this._ctx.currentTime,
+      0.015,
     );
   }
 
+  fadeTo(
+    targetVolume: number,
+    durationSec: number,
+    fromVolume?: number,
+  ): Promise<void> {
+    this.cancelFade();
+
+    const now = this._ctx.currentTime;
+    const gain = this._outputGain.gain;
+    const clamped = Math.max(0, Math.min(1, targetVolume));
+
+    gain.cancelScheduledValues(now);
+
+    if (durationSec <= 0) {
+      gain.setValueAtTime(clamped, now);
+      return Promise.resolve();
+    }
+
+    const startValue =
+      fromVolume !== undefined
+        ? Math.max(0, Math.min(1, fromVolume))
+        : gain.value;
+
+    gain.setValueAtTime(startValue, now);
+    gain.linearRampToValueAtTime(clamped, now + durationSec);
+
+    return new Promise<void>((resolve) => {
+      this._fadeResolve = resolve;
+      this._fadeTimer = setTimeout(() => {
+        this._fadeTimer = null;
+        this._fadeResolve = null;
+        resolve();
+      }, durationSec * 1000);
+    });
+  }
+
+  cancelFade(): void {
+    if (this._fadeTimer !== null) {
+      clearTimeout(this._fadeTimer);
+      this._fadeTimer = null;
+    }
+
+    const resolve = this._fadeResolve;
+    this._fadeResolve = null;
+
+    if (resolve) {
+      const now = this._ctx.currentTime;
+      this._outputGain.gain.cancelScheduledValues(now);
+      this._outputGain.gain.setValueAtTime(this._outputGain.gain.value, now);
+      resolve();
+    }
+  }
+
   getFrequencyData(): Uint8Array {
-    const data = new Uint8Array(this._analyser.frequencyBinCount);
-    this._analyser.getByteFrequencyData(data);
-    return data;
+    this._analyser.getByteFrequencyData(this._freqDataArray);
+    return this._freqDataArray;
   }
 
   getTimeDomainData(): Uint8Array {
-    const data = new Uint8Array(this._analyser.fftSize);
-    this._analyser.getByteTimeDomainData(data);
-    return data;
+    this._analyser.getByteTimeDomainData(this._timeDataArray);
+    return this._timeDataArray;
   }
 
   dispose(): void {
+    this.cancelFade();
     this._inputGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
