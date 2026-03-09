@@ -56,7 +56,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._muted = this._options.muted;
     this._playbackRate = PlaybackRate(this._options.playbackRate);
     this._loop = this._options.loop;
-
+    playerLogger.setLevel("debug");
     this._stateManager.onChange(({ from, to }) => {
       this.emit("statechange", { from, to });
     });
