@@ -18,7 +18,6 @@ import { HTML5Strategy } from "../strategy/Html5AudioStrategy";
 import { WebAudioStrategy } from "../strategy/WebAudioStrategy";
 import { AudioGraph } from "../audio/AudioGraph";
 import { ISourceHandler, SourceManager } from "../source";
-import { playerLogger } from "../utils/Logger";
 
 type ResolvedPlayerOptions = Required<Omit<PlayerOptions, "Hls">> & {
   Hls?: HlsConstructor;
@@ -56,7 +55,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._muted = this._options.muted;
     this._playbackRate = PlaybackRate(this._options.playbackRate);
     this._loop = this._options.loop;
-    playerLogger.setLevel("debug");
     this._stateManager.onChange(({ from, to }) => {
       this.emit("statechange", { from, to });
     });
@@ -355,40 +353,26 @@ export class Player extends EventEmitter<PlayerEventMap> {
   async fadeIn(durationSec: number = 1): Promise<void> {
     if (!this._audioGraph || !this._currentStrategy) return;
 
-    playerLogger.debug(
-      `[Player.fadeIn] duration=${durationSec}s, isPlaying=${this.isPlaying}`,
-    );
-
     if (!this.isPlaying) {
       await this._audioGraph.fadeTo(0, 0);
       await this.play();
     }
 
     const targetVol = this._muted ? 0 : this._volume;
-    playerLogger.debug(`[Player.fadeIn] target=${targetVol}`);
     await this._audioGraph.fadeTo(targetVol, durationSec, 0);
-    playerLogger.debug(`[Player.fadeIn] complete`);
   }
 
   async fadeOut(durationSec: number = 1): Promise<void> {
     if (!this._audioGraph) return;
-    playerLogger.debug(`[Player.fadeOut] duration=${durationSec}s`);
     await this._audioGraph.fadeTo(0, durationSec);
-    playerLogger.debug(
-      `[Player.fadeOut] complete, gain=${this._audioGraph.output}`,
-    );
   }
 
   async fadeOutAndPause(durationSec: number = 1): Promise<void> {
-    playerLogger.debug(`[Player.fadeOutAndPause] start`);
     await this.fadeOut(durationSec);
-    playerLogger.debug(`[Player.fadeOutAndPause] fade done, calling pause()`);
     this.pause();
-    playerLogger.debug(`[Player.fadeOutAndPause] paused, restoring volume`);
     void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
   }
   async fadeOutAndStop(durationSec: number = 1): Promise<void> {
-    playerLogger.debug(`[Player.fadeOutAndStop] start`);
     await this.fadeOut(durationSec);
     this.stop();
     void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);

@@ -1,5 +1,3 @@
-import { playerLogger } from "../utils/Logger";
-
 export interface EQBand {
   frequency: number;
   gain: number;
@@ -175,10 +173,6 @@ export class AudioGraph {
     const gain = this._outputGain.gain;
     const isFadingToSilence = targetVolume <= SILENCE_GAIN;
 
-    playerLogger.debug(
-      `[fadeTo] start — target=${targetVolume}, duration=${durationSec}s, from=${fromVolume ?? "current"}, currentGain=${gain.value}, ctxTime=${now.toFixed(4)}`,
-    );
-
     gain.cancelScheduledValues(now);
 
     if (durationSec <= 0) {
@@ -186,7 +180,6 @@ export class AudioGraph {
         ? 0
         : Math.max(0, Math.min(1, targetVolume));
       gain.setValueAtTime(instant, now);
-      playerLogger.debug(`[fadeTo] instant set to ${instant}`);
       return Promise.resolve();
     }
 
@@ -202,15 +195,8 @@ export class AudioGraph {
     gain.setValueAtTime(startValue, now);
     gain.exponentialRampToValueAtTime(endValue, now + durationSec);
 
-    playerLogger.debug(
-      `[fadeTo] ramp scheduled: ${startValue.toFixed(6)} -> ${endValue.toFixed(6)} over ${durationSec}s (ends at ctxTime=${(now + durationSec).toFixed(4)})`,
-    );
-
     if (isFadingToSilence) {
       gain.setTargetAtTime(0, now + durationSec, 0.005);
-      playerLogger.debug(
-        `[fadeTo] silence tail scheduled at ctxTime=${(now + durationSec).toFixed(4)} with τ=0.005`,
-      );
     }
 
     const timerMs = durationSec * 1000 + FADE_SAFETY_MARGIN_MS;
@@ -218,13 +204,6 @@ export class AudioGraph {
     return new Promise<void>((resolve) => {
       this._fadeResolve = resolve;
       this._fadeTimer = setTimeout(() => {
-        const resolveTime = this._ctx.currentTime;
-        const currentGainAtResolve = gain.value;
-
-        playerLogger.debug(
-          `[fadeTo] timer fired — ctxTime=${resolveTime.toFixed(4)}, gain.value=${currentGainAtResolve.toFixed(6)}, elapsed=${timerMs}ms`,
-        );
-
         this._fadeTimer = null;
         this._fadeResolve = null;
         resolve();
@@ -236,7 +215,6 @@ export class AudioGraph {
     if (this._fadeTimer !== null) {
       clearTimeout(this._fadeTimer);
       this._fadeTimer = null;
-      playerLogger.debug("[cancelFade] timer cleared");
     }
 
     const resolve = this._fadeResolve;
@@ -244,12 +222,8 @@ export class AudioGraph {
 
     if (resolve) {
       const now = this._ctx.currentTime;
-      const currentVal = this._outputGain.gain.value;
       this._outputGain.gain.cancelScheduledValues(now);
-      this._outputGain.gain.setValueAtTime(currentVal, now);
-      playerLogger.debug(
-        `[cancelFade] resolved at gain=${currentVal.toFixed(6)}, ctxTime=${now.toFixed(4)}`,
-      );
+      this._outputGain.gain.setValueAtTime(this._outputGain.gain.value, now);
       resolve();
     }
   }
