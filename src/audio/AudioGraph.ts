@@ -18,6 +18,10 @@ const DEFAULT_EQ_BANDS: EQBand[] = [
   { frequency: 16000, gain: 0, Q: 1, type: "highshelf" },
 ];
 
+const SILENCE_GAIN = 1e-4;
+
+const FADE_SAFETY_MARGIN_MS = 80;
+
 export class AudioGraph {
   private _ctx: AudioContext;
 
@@ -168,30 +172,45 @@ export class AudioGraph {
 
     const now = this._ctx.currentTime;
     const gain = this._outputGain.gain;
-    const clamped = Math.max(0, Math.min(1, targetVolume));
+    const isFadingToSilence = targetVolume <= SILENCE_GAIN;
 
     gain.cancelScheduledValues(now);
 
     if (durationSec <= 0) {
-      gain.setValueAtTime(clamped, now);
+      gain.setValueAtTime(
+        isFadingToSilence ? 0 : Math.max(0, Math.min(1, targetVolume)),
+        now,
+      );
       return Promise.resolve();
     }
 
     const startValue =
       fromVolume !== undefined
-        ? Math.max(0, Math.min(1, fromVolume))
-        : gain.value;
+        ? Math.max(SILENCE_GAIN, Math.min(1, fromVolume))
+        : Math.max(SILENCE_GAIN, gain.value);
+
+    const endValue = isFadingToSilence
+      ? SILENCE_GAIN
+      : Math.max(SILENCE_GAIN, Math.min(1, targetVolume));
 
     gain.setValueAtTime(startValue, now);
-    gain.linearRampToValueAtTime(clamped, now + durationSec);
+    gain.exponentialRampToValueAtTime(endValue, now + durationSec);
+
+    if (isFadingToSilence) {
+      // Schedule final zero AFTER the ramp completes — done on audio thread, no JS timing issues
+      gain.setTargetAtTime(0, now + durationSec, 0.005);
+    }
 
     return new Promise<void>((resolve) => {
       this._fadeResolve = resolve;
-      this._fadeTimer = setTimeout(() => {
-        this._fadeTimer = null;
-        this._fadeResolve = null;
-        resolve();
-      }, durationSec * 1000);
+      this._fadeTimer = setTimeout(
+        () => {
+          this._fadeTimer = null;
+          this._fadeResolve = null;
+          resolve();
+        },
+        durationSec * 1000 + FADE_SAFETY_MARGIN_MS,
+      );
     });
   }
 
