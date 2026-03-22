@@ -21,5 +21,8 @@ export function TimeSeconds(value: number): TimeSeconds {
 }
 
 export function PlaybackRate(value: number): PlaybackRate {
-  return value as PlaybackRate;
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1 as PlaybackRate;
+  }
+  return Math.max(0.0625, Math.min(16, value)) as PlaybackRate;
 }

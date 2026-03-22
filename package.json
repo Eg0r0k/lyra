@@ -24,7 +24,10 @@
     "dev": "tsup --watch",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "release:patch": "pnpm typecheck && pnpm build && npm version patch && pnpm publish",
+    "release:minor": "pnpm typecheck && pnpm build && npm version minor && pnpm publish",
+    "release:major": "pnpm typecheck && pnpm build && npm version major && pnpm publish",
+    "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
     "hls.js": "^1.4.0"
@@ -33,12 +36,6 @@
     "hls.js": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "hls.js": "^1.6.15",
-    "tsup": "^8.5.1",
-    "typescript": "^5.9.3"
   },
   "keywords": [
     "audio",
@@ -55,5 +52,10 @@
   },
   "bugs": {
     "url": "https://github.com/Eg0r0k/lyra/issues"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
+    "eslint": "^10.1.0"
   }
 }

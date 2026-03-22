@@ -18,6 +18,16 @@ const DEFAULT_EQ_BANDS: EQBand[] = [
   { frequency: 16000, gain: 0, Q: 1, type: "highshelf" },
 ];
 
+export interface AudioGraphOptions {
+  bands?: EQBand[];
+  analyser?: {
+    fftSize?: number; // default: 2048
+    smoothingTimeConstant?: number; // default: 0.8
+    minDecibels?: number;
+    maxDecibels?: number;
+  };
+}
+
 const SILENCE_GAIN = 1e-4;
 const FADE_SAFETY_MARGIN_MS = 80;
 
@@ -38,19 +48,25 @@ export class AudioGraph {
   private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private _fadeResolve: (() => void) | null = null;
 
-  constructor(ctx: AudioContext, bands?: EQBand[]) {
+  constructor(ctx: AudioContext, options: AudioGraphOptions = {}) {
+    const { analyser: aOpts = {}, bands } = options;
+
     this._ctx = ctx;
     this._bands = bands ?? [...DEFAULT_EQ_BANDS];
     this._inputGain = ctx.createGain();
     this._outputGain = ctx.createGain();
 
     this._analyser = ctx.createAnalyser();
-    this._analyser.fftSize = 2048;
+    this._analyser.fftSize = aOpts.fftSize ?? 2048;
+    this._analyser.smoothingTimeConstant = aOpts.smoothingTimeConstant ?? 0.8;
+    if (aOpts.minDecibels !== undefined)
+      this._analyser.minDecibels = aOpts.minDecibels;
+    if (aOpts.maxDecibels !== undefined)
+      this._analyser.maxDecibels = aOpts.maxDecibels;
 
     this._freqDataArray = new Uint8Array(
       this._analyser.frequencyBinCount,
     ) as Uint8Array<ArrayBuffer>;
-
     this._timeDataArray = new Uint8Array(
       this._analyser.fftSize,
     ) as Uint8Array<ArrayBuffer>;

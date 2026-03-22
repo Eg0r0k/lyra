@@ -30,7 +30,7 @@ export class HLSHandler implements ISourceHandler {
     if (this._Hls) {
       // noop
     } else {
-      console.error("[HLSHandler] No Hls class provided");
+      console.debug("[HLSHandler] No Hls class provided");
     }
   }
 
@@ -100,7 +100,13 @@ export class HLSHandler implements ISourceHandler {
       enableWorker: this._config.enableWorker ?? true,
     });
 
-    const audioElement = strategy.getAudioElement();
+    const audioElement = strategy.getMediaElement?.();
+    if (!audioElement) {
+      throw new PlayerError(
+        "HLS requires an HTML media element",
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
+      );
+    }
     const Hls = this._Hls;
     const hls = this._hls;
 

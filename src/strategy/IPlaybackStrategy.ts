@@ -9,6 +9,8 @@ export type PlaybackStrategyEvents = {
   waiting: void;
   playing: void;
   error: Error;
+  canplaythrough: void;
+  buffered: void;
 };
 
 export interface StrategyInitOptions {
@@ -49,11 +51,12 @@ export interface IPlaybackStrategy {
   setPlaybackRate(rate: PlaybackRate): void;
   setLoop(loop: boolean): void;
 
+  getMediaElement?(): HTMLMediaElement | null;
   connectToGraph(ctx: AudioContext): AudioNode;
 
   on<K extends keyof PlaybackStrategyEvents>(
     event: K,
-    callback: (data: PlaybackStrategyEvents[K]) => void
+    callback: (data: PlaybackStrategyEvents[K]) => void,
   ): () => void;
 
   dispose(): void;

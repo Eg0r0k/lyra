@@ -11,7 +11,6 @@ export class UrlHandler implements ISourceHandler {
 
   canHandle(source: AudioSource): boolean {
     if (!source.url) {
-      console.error("[UrlHandler] canHandle: no url");
       return false;
     }
 
@@ -21,7 +20,7 @@ export class UrlHandler implements ISourceHandler {
       return false;
     }
 
-    if (source.type === "hls" || source.type === "dash") {
+    if (source.type === "hls") {
       return false;
     }
 
@@ -56,7 +55,16 @@ export class UrlHandler implements ISourceHandler {
       const arrayBuffer = await response.arrayBuffer();
       signal.throwIfAborted();
 
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      let audioBuffer: AudioBuffer;
+      try {
+        audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      } catch (err) {
+        throw new PlayerError(
+          "Failed to decode audio data",
+          PlayerErrorCode.LOAD_DECODE,
+          err,
+        );
+      }
 
       return {
         audioBuffer,

@@ -90,6 +90,7 @@ export class WebAudioStrategy
 
     this._isReady = true;
     this.emit("durationchange", this.duration);
+    this.emit("canplaythrough");
   }
 
   async play(): Promise<void> {
@@ -260,13 +261,6 @@ export class WebAudioStrategy
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
-  }
-
-  on<K extends keyof PlaybackStrategyEvents>(
-    event: K,
-    callback: (data: PlaybackStrategyEvents[K]) => void,
-  ): () => void {
-    return super.on(event, callback as any);
   }
 
   dispose(): void {

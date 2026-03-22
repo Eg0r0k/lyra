@@ -15,6 +15,7 @@ export class HTML5Strategy
   private _audio: HTMLAudioElement;
   private _sourceNode: MediaElementAudioSourceNode | null = null;
   private _isReady = false;
+  private _wasBuffering = false;
 
   constructor() {
     super();
@@ -34,14 +35,17 @@ export class HTML5Strategy
     return !this._audio.paused && !this._audio.ended;
   }
 
+  getMediaElement(): HTMLMediaElement {
+    return this._audio;
+  }
   async initialize(options: StrategyInitOptions): Promise<void> {
     this._audio.volume = options.volume;
     this._audio.muted = options.muted;
     this._audio.playbackRate = options.playbackRate;
     this._audio.loop = options.loop;
     this._audio.preload = options.preload;
-    const isBlob = this._audio.src.startsWith("blob:");
-    if (options.sourceUrl && !isBlob) {
+    const isNewSourceBlob = options.sourceUrl?.startsWith("blob:") ?? false;
+    if (options.sourceUrl && !isNewSourceBlob) {
       this._audio.src = options.sourceUrl;
 
       await new Promise<void>((resolve, reject) => {
@@ -72,10 +76,28 @@ export class HTML5Strategy
         this._isReady = true;
         return;
       }
-      await new Promise<void>((resolve) => {
-        this._audio.addEventListener("loadedmetadata", () => resolve(), {
-          once: true,
-        });
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          this._audio.removeEventListener("loadedmetadata", onMeta);
+          this._audio.removeEventListener("error", onError);
+          clearTimeout(timer);
+        };
+
+        const onMeta = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error(this.getMediaErrorMessage()));
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("Timeout waiting for loadedmetadata"));
+        }, 30_000);
+
+        this._audio.addEventListener("loadedmetadata", onMeta, { once: true });
+        this._audio.addEventListener("error", onError, { once: true });
       });
     }
     this._isReady = true;
@@ -91,6 +113,23 @@ export class HTML5Strategy
       }
     });
 
+    this._audio.addEventListener("canplaythrough", () => {
+      this.emit("canplaythrough");
+    });
+
+    this._audio.addEventListener("waiting", () => {
+      this._wasBuffering = true;
+      this.emit("waiting");
+    });
+
+    this._audio.addEventListener("playing", () => {
+      if (this._wasBuffering) {
+        this._wasBuffering = false;
+        this.emit("buffered");
+      }
+      this.emit("playing");
+    });
+
     this._audio.addEventListener("ended", () => {
       this.emit("ended");
     });
@@ -102,15 +141,9 @@ export class HTML5Strategy
     this._audio.addEventListener("durationchange", () => {
       this.emit("durationchange", TimeSeconds(this._audio.duration));
     });
+  }
 
-    this._audio.addEventListener("waiting", () => {
-      this.emit("waiting");
-    });
-
-    this._audio.addEventListener("playing", () => {
-      this.emit("playing");
-    });
-
+  attachErrorHandler(): void {
     this._audio.addEventListener("error", () => {
       this.emit("error", new Error(this.getMediaErrorMessage()));
     });
@@ -178,13 +211,6 @@ export class HTML5Strategy
   }
   getAudioElement(): HTMLAudioElement {
     return this._audio;
-  }
-
-  on<K extends keyof PlaybackStrategyEvents>(
-    event: K,
-    callback: (data: PlaybackStrategyEvents[K]) => void
-  ): () => void {
-    return super.on(event, callback as any);
   }
 
   dispose(): void {

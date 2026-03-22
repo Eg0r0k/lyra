@@ -24,7 +24,7 @@ export class BufferHandler implements ISourceHandler {
     source: AudioSource,
     _strategy: IPlaybackStrategy,
     ctx: AudioContext | null,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<PreparedSource> {
     let arrayBuffer: ArrayBuffer;
     if (source.data instanceof ArrayBuffer) {
@@ -33,19 +33,27 @@ export class BufferHandler implements ISourceHandler {
       const { buffer, byteOffset, byteLength } = source.data;
       arrayBuffer = (buffer as ArrayBuffer).slice(
         byteOffset,
-        byteOffset + byteLength
+        byteOffset + byteLength,
       );
     } else {
       throw new PlayerError(
         "BufferHandler requires ArrayBuffer or Uint8Array",
-        PlayerErrorCode.LOAD_NOT_SUPPORTED
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
 
     if (ctx) {
       signal.throwIfAborted();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
-
+      let audioBuffer: AudioBuffer;
+      try {
+        audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      } catch (err) {
+        throw new PlayerError(
+          "Failed to decode audio data",
+          PlayerErrorCode.LOAD_DECODE,
+          err,
+        );
+      }
       return {
         audioBuffer,
         duration: audioBuffer.duration,

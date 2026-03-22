@@ -1,5 +1,6 @@
 import { IPlaybackStrategy } from "../../strategy/IPlaybackStrategy";
 import { AudioSource } from "../../types";
+import { PlayerError, PlayerErrorCode } from "../../types/events";
 import {
   ISourceHandler,
   PreparedSource,
@@ -21,18 +22,26 @@ export class BlobHandler implements ISourceHandler {
     source: AudioSource,
     strategy: IPlaybackStrategy,
     ctx: AudioContext | null,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<PreparedSource> {
     const blob = source.data as Blob;
 
     if (strategy.id === "webaudio" && ctx) {
       const arrayBuffer = await blob.arrayBuffer();
       signal.throwIfAborted();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-      return {
-        audioBuffer,
-        duration: audioBuffer.duration,
-      };
+
+      let audioBuffer: AudioBuffer;
+      try {
+        audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      } catch (err) {
+        throw new PlayerError(
+          "Failed to decode audio data",
+          PlayerErrorCode.LOAD_DECODE,
+          err,
+        );
+      }
+
+      return { audioBuffer, duration: audioBuffer.duration };
     }
 
     const objectUrl = URL.createObjectURL(blob);

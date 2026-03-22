@@ -22,12 +22,7 @@ export type AudioFormat =
   | "m3u8"
   | "mpd";
 
-export type AudioSourceType =
-  | "native"
-  | "hls"
-  | "mediabunny"
-  | "buffer"
-  | "dash"; //! NO SUPPORTED ;
+export type AudioSourceType = "native" | "hls" | "buffer";
 
 export interface AudioSource {
   url?: string;
@@ -112,6 +107,7 @@ export const DEFAULT_OPTIONS: Required<Omit<PlayerOptions, "Hls">> & {
     startLevel: -1,
     autoStartLoad: true,
     enableWorker: true,
+    startFragPrefetch: false,
   },
   Hls: undefined,
 };

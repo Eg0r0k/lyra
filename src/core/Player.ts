@@ -192,8 +192,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this.bindStrategyEvents();
 
       this._stateManager.transition("ready");
-      this.emit("canplay");
       this.emit("loadedmetadata", { duration: this.duration });
+      this.emit("canplay");
 
       const capabilities = this._sourceManager.getActiveCapabilities();
       if (capabilities?.qualityLevels?.length) {
@@ -456,6 +456,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this.emit("play");
     });
 
+    if (this._currentStrategy instanceof HTML5Strategy) {
+      this._currentStrategy.attachErrorHandler();
+    }
+
     this._currentStrategy.on("pause", () => {
       this.emit("pause");
     });
@@ -475,6 +479,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._currentStrategy.on("durationchange", (duration) => {
       this.emit("durationchange", duration);
+    });
+
+    this._currentStrategy.on("canplaythrough", () => {
+      this.emit("canplaythrough");
+    });
+
+    this._currentStrategy.on("buffered", () => {
+      this.emit("buffered");
     });
 
     this._currentStrategy.on("waiting", () => {

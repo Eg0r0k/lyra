@@ -2,14 +2,13 @@ type Callback<T> = T extends void ? () => void : (payload: T) => void;
 type Unsubscribe = () => void;
 
 export class EventEmitter<
-  TEventMap extends { [K in keyof TEventMap]: TEventMap[K] }
+  TEventMap extends { [K in keyof TEventMap]: TEventMap[K] },
 > {
   private listeners = new Map<keyof TEventMap, Set<Callback<unknown>>>();
-  private onceFlags = new WeakSet<Callback<unknown>>();
 
   on<K extends keyof TEventMap>(
     event: K,
-    callback: Callback<TEventMap[K]>
+    callback: Callback<TEventMap[K]>,
   ): Unsubscribe {
     let set = this.listeners.get(event);
     if (!set) {
@@ -24,20 +23,19 @@ export class EventEmitter<
 
   once<K extends keyof TEventMap>(
     event: K,
-    callback: Callback<TEventMap[K]>
+    callback: Callback<TEventMap[K]>,
   ): Unsubscribe {
     const wrapper = ((payload: TEventMap[K]) => {
       this.off(event, wrapper as Callback<TEventMap[K]>);
       (callback as (p: TEventMap[K]) => void)(payload);
     }) as Callback<TEventMap[K]>;
 
-    this.onceFlags.add(wrapper as Callback<unknown>);
     return this.on(event, wrapper);
   }
 
   waitFor<K extends keyof TEventMap>(
     event: K,
-    options?: { timeout?: number; signal?: AbortSignal }
+    options?: { timeout?: number; signal?: AbortSignal },
   ): Promise<TEventMap[K]> {
     return new Promise((resolve, reject) => {
       const { timeout, signal } = options ?? {};
@@ -79,7 +77,7 @@ export class EventEmitter<
 
   off<K extends keyof TEventMap>(
     event: K,
-    callback?: Callback<TEventMap[K]>
+    callback?: Callback<TEventMap[K]>,
   ): void {
     if (!callback) {
       this.listeners.delete(event);

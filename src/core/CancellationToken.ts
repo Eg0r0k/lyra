@@ -31,33 +31,38 @@ export class CancellationToken {
   }
 
   wrap<T>(promise: Promise<T>): Promise<T> {
-    if (this.isCancelled) {
-      return Promise.reject(new CancellationError());
-    }
+    if (this.isCancelled) return Promise.reject(new CancellationError());
 
     return new Promise((resolve, reject) => {
-      const onAbort = () => reject(new CancellationError());
+      let settled = false;
+      const done = (fn: () => void) => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
 
+      const onAbort = () => done(() => reject(new CancellationError()));
       this.signal.addEventListener("abort", onAbort, { once: true });
 
       promise
-        .then((value) => {
-          this.signal.removeEventListener("abort", onAbort);
-          if (this.isCancelled) {
-            reject(new CancellationError());
-          } else {
+        .then((value) =>
+          done(() => {
+            this.signal.removeEventListener("abort", onAbort);
             resolve(value);
-          }
-        })
-        .catch((err) => {
-          this.signal.removeEventListener("abort", onAbort);
-          reject(err);
-        });
+          }),
+        )
+        .catch((err) =>
+          done(() => {
+            this.signal.removeEventListener("abort", onAbort);
+            reject(err);
+          }),
+        );
     });
   }
 
-  reset(): CancellationToken {
-    this.cancel();
+  static replace(old: CancellationToken): CancellationToken {
+    old.cancel();
     return new CancellationToken();
   }
 }

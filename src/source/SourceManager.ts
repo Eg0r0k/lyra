@@ -24,9 +24,7 @@ export class SourceManager {
         new HLSHandler(this._options.hlsConfig, this._options.Hls),
       );
     } else {
-      console.error(
-        "[SourceManager] HLS not available (Hls class not provided)",
-      );
+      //noop
     }
 
     // Buffer
