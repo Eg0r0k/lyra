@@ -44,8 +44,8 @@ export class HTML5Strategy
     this._audio.playbackRate = options.playbackRate;
     this._audio.loop = options.loop;
     this._audio.preload = options.preload;
-    const isNewSourceBlob = options.sourceUrl?.startsWith("blob:") ?? false;
-    if (options.sourceUrl && !isNewSourceBlob) {
+
+    if (options.sourceUrl) {
       this._audio.src = options.sourceUrl;
 
       await new Promise<void>((resolve, reject) => {
@@ -53,12 +53,10 @@ export class HTML5Strategy
           cleanup();
           resolve();
         };
-
         const onError = () => {
           cleanup();
           reject(new Error(this.getMediaErrorMessage()));
         };
-
         const cleanup = () => {
           this._audio.removeEventListener("canplay", onCanPlay);
           this._audio.removeEventListener("error", onError);
@@ -66,7 +64,6 @@ export class HTML5Strategy
 
         this._audio.addEventListener("canplay", onCanPlay, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
-
         this._audio.load();
       });
 
@@ -82,7 +79,6 @@ export class HTML5Strategy
           this._audio.removeEventListener("error", onError);
           clearTimeout(timer);
         };
-
         const onMeta = () => {
           cleanup();
           resolve();
@@ -99,8 +95,8 @@ export class HTML5Strategy
         this._audio.addEventListener("loadedmetadata", onMeta, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
       });
+      this._isReady = true;
     }
-    this._isReady = true;
   }
   private setupEventListeners(): void {
     this._audio.addEventListener("play", () => {
