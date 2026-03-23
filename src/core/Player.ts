@@ -183,6 +183,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         playbackRate: this._playbackRate,
         loop: this._loop,
         preload: this._options.preload,
+        metadata: prepared.metadata,
       });
 
       signal.throwIfAborted();

@@ -45,6 +45,53 @@ export class HTML5Strategy
     this._audio.loop = options.loop;
     this._audio.preload = options.preload;
 
+    const preAttachedMedia = options.metadata?.preAttachedMedia === true;
+
+    if (preAttachedMedia) {
+      if (this._audio.readyState >= 1) {
+        this._isReady = true;
+        return;
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          this._audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+          this._audio.removeEventListener("canplay", onCanPlay);
+          this._audio.removeEventListener("error", onError);
+          clearTimeout(timer);
+        };
+
+        const onLoadedMetadata = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onCanPlay = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error(this.getMediaErrorMessage()));
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("Timeout waiting for attached media readiness"));
+        }, 30_000);
+
+        this._audio.addEventListener("loadedmetadata", onLoadedMetadata, {
+          once: true,
+        });
+        this._audio.addEventListener("canplay", onCanPlay, { once: true });
+        this._audio.addEventListener("error", onError, { once: true });
+      });
+
+      this._isReady = true;
+      return;
+    }
+
     if (options.sourceUrl) {
       this._audio.src = options.sourceUrl;
 
@@ -73,28 +120,40 @@ export class HTML5Strategy
         this._isReady = true;
         return;
       }
+
       await new Promise<void>((resolve, reject) => {
         const cleanup = () => {
           this._audio.removeEventListener("loadedmetadata", onMeta);
+          this._audio.removeEventListener("canplay", onCanPlay);
           this._audio.removeEventListener("error", onError);
           clearTimeout(timer);
         };
+
         const onMeta = () => {
           cleanup();
           resolve();
         };
+
+        const onCanPlay = () => {
+          cleanup();
+          resolve();
+        };
+
         const onError = () => {
           cleanup();
           reject(new Error(this.getMediaErrorMessage()));
         };
+
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error("Timeout waiting for loadedmetadata"));
         }, 30_000);
 
         this._audio.addEventListener("loadedmetadata", onMeta, { once: true });
+        this._audio.addEventListener("canplay", onCanPlay, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
       });
+
       this._isReady = true;
     }
   }

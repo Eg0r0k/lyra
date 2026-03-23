@@ -125,8 +125,10 @@ export class HLSHandler implements ISourceHandler {
         if (manifestParsed && mediaAttached && firstFragBuffered) {
           signal.removeEventListener("abort", onAbort);
           resolve({
-            sourceUrl: audioElement.src,
             duration: audioElement.duration || 0,
+            metadata: {
+              preAttachedMedia: true,
+            },
           });
         }
       };

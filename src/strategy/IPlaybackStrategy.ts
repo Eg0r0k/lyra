@@ -15,20 +15,17 @@ export type PlaybackStrategyEvents = {
 
 export interface StrategyInitOptions {
   sourceUrl?: string;
-
   audioBuffer?: AudioBuffer;
-
   audioContext: AudioContext;
-
-  volume: Volume;
-
+  volume: number;
   muted: boolean;
-
-  playbackRate: PlaybackRate;
-
+  playbackRate: number;
   loop: boolean;
-
   preload: "none" | "metadata" | "auto";
+  metadata?: {
+    preAttachedMedia?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface IPlaybackStrategy {
