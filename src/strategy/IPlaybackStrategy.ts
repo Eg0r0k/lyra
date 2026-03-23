@@ -17,15 +17,12 @@ export interface StrategyInitOptions {
   sourceUrl?: string;
   audioBuffer?: AudioBuffer;
   audioContext: AudioContext;
-  volume: number;
+  volume: Volume;
   muted: boolean;
-  playbackRate: number;
+  playbackRate: PlaybackRate;
   loop: boolean;
   preload: "none" | "metadata" | "auto";
-  metadata?: {
-    preAttachedMedia?: boolean;
-    [key: string]: unknown;
-  };
+  metadata?: Record<string, unknown>;
 }
 
 export interface IPlaybackStrategy {
