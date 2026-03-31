@@ -344,10 +344,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async setSinkId(deviceId: string): Promise<void> {
+    console.log("[Player.setSinkId] called with deviceId:", deviceId, "currentStrategy:", this._currentStrategy?.id);
     if (!this._currentStrategy) return;
     
     if ("setSinkId" in this._currentStrategy) {
+      console.log("[Player.setSinkId] strategy has setSinkId, calling it");
       await (this._currentStrategy as any).setSinkId(deviceId);
+    } else {
+      console.log("[Player.setSinkId] strategy does NOT have setSinkId, skipping");
     }
   }
 
