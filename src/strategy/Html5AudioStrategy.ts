@@ -268,6 +268,12 @@ export class HTML5Strategy
     return this._audio;
   }
 
+  async setSinkId(deviceId: string): Promise<void> {
+    if ("setSinkId" in this._audio) {
+      await (this._audio as any).setSinkId(deviceId);
+    }
+  }
+
   dispose(): void {
     this._audio.pause();
     this._audio.src = "";

@@ -343,6 +343,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._currentStrategy?.setLoop(loop);
   }
 
+  async setSinkId(deviceId: string): Promise<void> {
+    if (!this._currentStrategy) return;
+    
+    if ("setSinkId" in this._currentStrategy) {
+      await (this._currentStrategy as any).setSinkId(deviceId);
+    }
+  }
+
   async fadeTo(volume: number, durationSec: number = 1): Promise<void> {
     if (!this._audioGraph) return;
     await this._audioGraph.fadeTo(
