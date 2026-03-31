@@ -1,6 +1,6 @@
 {
   "name": "lyra-audio",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Flexible audio player library with Web Audio API and HTML5 support",
   "author": "Eg0rk",
   "license": "MIT",
@@ -48,7 +48,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Eg0r0k/lyra"
+    "url": "git+https://github.com/Eg0r0k/lyra.git"
   },
   "bugs": {
     "url": "https://github.com/Eg0r0k/lyra/issues"
