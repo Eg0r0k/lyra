@@ -1,3 +1,8 @@
+import {
+  DEFAULT_LOUDNESS_NORMALIZATION_OPTIONS,
+  LoudnessNormalizationOptions,
+} from "../audio/normalization";
+
 export type PlayerState =
   | "idle"
   | "loading"
@@ -40,6 +45,7 @@ export interface QualityLevel {
   label: string;
   codec?: string;
 }
+
 export function normalizeSource(input: AudioSourceInput): AudioSource {
   if (typeof input === "string") {
     return { url: input };
@@ -87,12 +93,19 @@ export interface PlayerOptions {
   autoplay?: boolean;
   preload?: "none" | "metadata" | "auto";
   hlsConfig?: Partial<HLSConfig>;
-
+  loudnessNormalization?: LoudnessNormalizationOptions;
   Hls?: HlsConstructor;
 }
-export const DEFAULT_OPTIONS: Required<Omit<PlayerOptions, "Hls">> & {
+
+export type ResolvedPlayerOptions = Required<
+  Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "hlsConfig">
+> & {
+  hlsConfig: Required<HLSConfig>;
+  loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
-} = {
+};
+
+export const DEFAULT_OPTIONS: ResolvedPlayerOptions = {
   mode: "auto",
   latencyHint: "interactive",
   volume: 1,
@@ -109,5 +122,6 @@ export const DEFAULT_OPTIONS: Required<Omit<PlayerOptions, "Hls">> & {
     enableWorker: true,
     startFragPrefetch: false,
   },
+  loudnessNormalization: DEFAULT_LOUDNESS_NORMALIZATION_OPTIONS,
   Hls: undefined,
 };

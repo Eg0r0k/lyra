@@ -269,12 +269,8 @@ export class HTML5Strategy
   }
 
   async setSinkId(deviceId: string): Promise<void> {
-    console.log("[HTML5Strategy.setSinkId] deviceId:", deviceId);
-    console.log("[HTML5Strategy.setSinkId] audio element:", this._audio);
-    console.log("[HTML5Strategy.setSinkId] has setSinkId:", "setSinkId" in this._audio);
     if ("setSinkId" in this._audio) {
       await (this._audio as any).setSinkId(deviceId);
-      console.log("[HTML5Strategy.setSinkId] completed");
     }
   }
 

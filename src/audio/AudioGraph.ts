@@ -1,3 +1,5 @@
+import { dbToGain } from "./normalization";
+
 export interface EQBand {
   frequency: number;
   gain: number;
@@ -21,8 +23,8 @@ const DEFAULT_EQ_BANDS: EQBand[] = [
 export interface AudioGraphOptions {
   bands?: EQBand[];
   analyser?: {
-    fftSize?: number; // default: 2048
-    smoothingTimeConstant?: number; // default: 0.8
+    fftSize?: number;
+    smoothingTimeConstant?: number;
     minDecibels?: number;
     maxDecibels?: number;
   };
@@ -35,12 +37,14 @@ export class AudioGraph {
   private _ctx: AudioContext;
 
   private _inputGain: GainNode;
+  private _normalizationGain: GainNode;
   private _eqFilters: BiquadFilterNode[] = [];
   private _outputGain: GainNode;
   private _analyser: AnalyserNode;
 
   private _eqEnabled = true;
   private _bands: EQBand[];
+  private _normalizationGainDb = 0;
 
   private _freqDataArray: Uint8Array<ArrayBuffer>;
   private _timeDataArray: Uint8Array<ArrayBuffer>;
@@ -53,20 +57,30 @@ export class AudioGraph {
 
     this._ctx = ctx;
     this._bands = bands ?? [...DEFAULT_EQ_BANDS];
+
     this._inputGain = ctx.createGain();
+    this._normalizationGain = ctx.createGain();
     this._outputGain = ctx.createGain();
+
+    this._normalizationGain.gain.value = 1;
+    this._outputGain.gain.value = 1;
 
     this._analyser = ctx.createAnalyser();
     this._analyser.fftSize = aOpts.fftSize ?? 2048;
     this._analyser.smoothingTimeConstant = aOpts.smoothingTimeConstant ?? 0.8;
-    if (aOpts.minDecibels !== undefined)
+
+    if (aOpts.minDecibels !== undefined) {
       this._analyser.minDecibels = aOpts.minDecibels;
-    if (aOpts.maxDecibels !== undefined)
+    }
+
+    if (aOpts.maxDecibels !== undefined) {
       this._analyser.maxDecibels = aOpts.maxDecibels;
+    }
 
     this._freqDataArray = new Uint8Array(
       this._analyser.frequencyBinCount,
     ) as Uint8Array<ArrayBuffer>;
+
     this._timeDataArray = new Uint8Array(
       this._analyser.fftSize,
     ) as Uint8Array<ArrayBuffer>;
@@ -95,6 +109,14 @@ export class AudioGraph {
     return this._fadeTimer !== null;
   }
 
+  get eqEnabled(): boolean {
+    return this._eqEnabled;
+  }
+
+  getNormalizationGainDb(): number {
+    return this._normalizationGainDb;
+  }
+
   private createEQFilters(): void {
     this._eqFilters = this._bands.map((band) => {
       const filter = this._ctx.createBiquadFilter();
@@ -108,11 +130,14 @@ export class AudioGraph {
 
   private connectChain(): void {
     this._inputGain.disconnect();
+    this._normalizationGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
 
+    this._inputGain.connect(this._normalizationGain);
+
     if (this._eqFilters.length > 0) {
-      this._inputGain.connect(this._eqFilters[0]);
+      this._normalizationGain.connect(this._eqFilters[0]);
 
       for (let i = 0; i < this._eqFilters.length - 1; i++) {
         this._eqFilters[i].connect(this._eqFilters[i + 1]);
@@ -120,7 +145,7 @@ export class AudioGraph {
 
       this._eqFilters[this._eqFilters.length - 1].connect(this._analyser);
     } else {
-      this._inputGain.connect(this._analyser);
+      this._normalizationGain.connect(this._analyser);
     }
 
     this._analyser.connect(this._outputGain);
@@ -155,8 +180,8 @@ export class AudioGraph {
 
   setEQEnabled(enabled: boolean): void {
     if (this._eqEnabled === enabled) return;
-    this._eqEnabled = enabled;
 
+    this._eqEnabled = enabled;
     const now = this._ctx.currentTime;
 
     this._bands.forEach((band, i) => {
@@ -165,8 +190,30 @@ export class AudioGraph {
     });
   }
 
-  get eqEnabled(): boolean {
-    return this._eqEnabled;
+  setNormalizationGainDb(db: number): void {
+    this._normalizationGainDb = db;
+    const linear = Math.max(0, dbToGain(db));
+    this._normalizationGain.gain.setTargetAtTime(
+      linear,
+      this._ctx.currentTime,
+      0.015,
+    );
+  }
+
+  setNormalizationGainDbSmooth(db: number, durationSec: number = 0.05): void {
+    this._normalizationGainDb = db;
+
+    const now = this._ctx.currentTime;
+    const gain = this._normalizationGain.gain;
+    const linear = Math.max(0, dbToGain(db));
+
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(linear, now + Math.max(0, durationSec));
+  }
+
+  resetNormalization(): void {
+    this.setNormalizationGainDb(0);
   }
 
   setVolume(volume: number): void {
@@ -257,6 +304,7 @@ export class AudioGraph {
   dispose(): void {
     this.cancelFade();
     this._inputGain.disconnect();
+    this._normalizationGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
     this._outputGain.disconnect();

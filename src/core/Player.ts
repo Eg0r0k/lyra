@@ -18,8 +18,16 @@ import { HTML5Strategy } from "../strategy/Html5AudioStrategy";
 import { WebAudioStrategy } from "../strategy/WebAudioStrategy";
 import { AudioGraph } from "../audio/AudioGraph";
 import { ISourceHandler, SourceManager } from "../source";
+import {
+  computeNormalizationGainDb,
+  LoudnessMetadata,
+  LoudnessNormalizationOptions,
+} from "../audio/normalization";
 
-type ResolvedPlayerOptions = Required<Omit<PlayerOptions, "Hls">> & {
+type ResolvedPlayerOptions = Required<
+  Omit<PlayerOptions, "Hls" | "loudnessNormalization">
+> & {
+  loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
 };
 
@@ -41,25 +49,41 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private _objectUrls: Set<string> = new Set();
 
+  private _loudnessMetadata: LoudnessMetadata | null = null;
+
   constructor(options: PlayerOptions = {}) {
     super();
 
-    this._options = { ...DEFAULT_OPTIONS, ...options };
+    const loudnessNormalization: Required<LoudnessNormalizationOptions> = {
+      ...DEFAULT_OPTIONS.loudnessNormalization,
+      ...(options.loudnessNormalization ?? {}),
+    };
+
+    this._options = {
+      ...DEFAULT_OPTIONS,
+      ...options,
+      hlsConfig: {
+        ...DEFAULT_OPTIONS.hlsConfig,
+        ...(options.hlsConfig ?? {}),
+      },
+      loudnessNormalization,
+    };
 
     this._stateManager = new StateManager();
     this._sourceManager = new SourceManager({
       hlsConfig: this._options.hlsConfig,
       Hls: this._options.Hls,
     });
+
     this._volume = Volume(this._options.volume);
     this._muted = this._options.muted;
     this._playbackRate = PlaybackRate(this._options.playbackRate);
     this._loop = this._options.loop;
+
     this._stateManager.onChange(({ from, to }) => {
       this.emit("statechange", { from, to });
     });
   }
-
   get state(): PlayerState {
     return this._stateManager.state;
   }
@@ -116,6 +140,26 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   get graph(): AudioGraph | null {
     return this._audioGraph;
+  }
+
+  get loudnessMetadata(): LoudnessMetadata | null {
+    return this._loudnessMetadata;
+  }
+
+  get normalizationEnabled(): boolean {
+    return this._options.loudnessNormalization.enabled;
+  }
+
+  get targetLufs(): number {
+    return this._options.loudnessNormalization.targetLufs;
+  }
+
+  get normalizationOptions(): Required<LoudnessNormalizationOptions> {
+    return this._options.loudnessNormalization;
+  }
+
+  getAppliedNormalizationGainDb(): number {
+    return this._audioGraph?.getNormalizationGainDb() ?? 0;
   }
 
   async load(source: AudioSourceInput): Promise<void> {
@@ -189,8 +233,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
       signal.throwIfAborted();
 
       this.setupAudioGraph();
-
       this.bindStrategyEvents();
+      this.recomputeNormalization();
 
       this._stateManager.transition("ready");
       this.emit("loadedmetadata", { duration: this.duration });
@@ -309,6 +353,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     } else {
       this._currentStrategy?.setVolume(this._volume);
     }
+
     this.emit("volumechange", {
       volume: this._volume,
       muted: this._muted,
@@ -345,7 +390,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   async setSinkId(deviceId: string): Promise<void> {
     if (!this._currentStrategy) return;
-    
+
     if ("setSinkId" in this._currentStrategy) {
       await (this._currentStrategy as any).setSinkId(deviceId);
     }
@@ -381,13 +426,93 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.pause();
     void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
   }
+
   async fadeOutAndStop(durationSec: number = 1): Promise<void> {
     await this.fadeOut(durationSec);
     this.stop();
     void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
   }
+
   cancelFade(): void {
     this._audioGraph?.cancelFade();
+  }
+
+  setLoudnessMetadata(metadata: LoudnessMetadata | null): void {
+    this._loudnessMetadata = metadata;
+    this.recomputeNormalization();
+  }
+
+  getLoudnessMetadata(): LoudnessMetadata | null {
+    return this._loudnessMetadata;
+  }
+
+  clearLoudnessMetadata(): void {
+    this._loudnessMetadata = null;
+    this.recomputeNormalization();
+  }
+
+  setNormalizationEnabled(enabled: boolean): void {
+    this._options.loudnessNormalization.enabled = enabled;
+    this.recomputeNormalization();
+  }
+
+  setTargetLufs(targetLufs: number): void {
+    this._options.loudnessNormalization.targetLufs = targetLufs;
+    this.recomputeNormalization();
+  }
+
+  setNormalizationOptions(options: LoudnessNormalizationOptions): void {
+    this._options.loudnessNormalization = {
+      ...this._options.loudnessNormalization,
+      ...options,
+    };
+    this.recomputeNormalization();
+  }
+
+  recomputeNormalization(): void {
+    if (!this._audioGraph) return;
+
+    const opts = this._options.loudnessNormalization;
+
+    if (!opts.enabled || !this._loudnessMetadata) {
+      this._audioGraph.resetNormalization();
+      this.emit("normalizationchange", {
+        enabled: false,
+        gainDb: 0,
+        targetLufs: opts.targetLufs,
+        metadata: this._loudnessMetadata,
+      });
+      return;
+    }
+
+    const gainDb = computeNormalizationGainDb({
+      measuredLufs: this._loudnessMetadata.integratedLufs,
+      targetLufs: opts.targetLufs,
+      truePeakDbtp: this._loudnessMetadata.truePeakDbtp,
+      preventClipping: opts.preventClipping,
+      headroomDb: opts.headroomDb,
+      maxGainDb: opts.maxGainDb,
+      maxAttenuationDb: opts.maxAttenuationDb,
+    });
+
+    this._audioGraph.setNormalizationGainDbSmooth(gainDb, opts.smoothTimeSec);
+
+    this.emit("normalizationchange", {
+      enabled: true,
+      gainDb,
+      targetLufs: opts.targetLufs,
+      metadata: this._loudnessMetadata,
+    });
+  }
+
+  resetNormalization(): void {
+    this._audioGraph?.resetNormalization();
+    this.emit("normalizationchange", {
+      enabled: false,
+      gainDb: 0,
+      targetLufs: this._options.loudnessNormalization.targetLufs,
+      metadata: this._loudnessMetadata,
+    });
   }
 
   getQualityLevels(): QualityLevel[] {
@@ -450,12 +575,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
-
     sourceNode.connect(this._audioGraph.input);
 
+    this._audioGraph.output.disconnect();
     this._audioGraph.output.connect(this.audioContext.destination);
+
     this._audioGraph.setVolume(this._muted ? 0 : this._volume);
     this._currentStrategy.setVolume(Volume(1));
+    this._currentStrategy.setMuted(false);
   }
 
   private bindStrategyEvents(): void {
@@ -526,6 +653,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private async cleanup(): Promise<void> {
     this._audioGraph?.cancelFade();
+    this._audioGraph?.resetNormalization();
 
     this._currentStrategy?.dispose();
     this._currentStrategy = null;

@@ -1,5 +1,6 @@
 import { PlayerState, QualityLevel } from ".";
 import { PlaybackRate, TimeSeconds, Volume } from "./branded";
+import { LoudnessMetadata } from "../audio/normalization";
 
 export interface TimeUpdatePayload {
   currentTime: TimeSeconds;
@@ -16,11 +17,20 @@ export interface BufferPayload {
   buffered: TimeRanges;
   percent: number;
 }
+
 export interface ErrorPayload {
   code: PlayerErrorCode;
   message: string;
   cause?: unknown;
 }
+
+export interface NormalizationChangePayload {
+  enabled: boolean;
+  gainDb: number;
+  targetLufs: number;
+  metadata: LoudnessMetadata | null;
+}
+
 export interface PlayerEventMap {
   // Lifecycle
   loadstart: void;
@@ -43,19 +53,25 @@ export interface PlayerEventMap {
 
   // Buffering
   progress: BufferPayload;
-  waiting: void; // Buffering started
-  buffered: void; // Buffering ended
+  waiting: void;
+  buffered: void;
 
+  // State
   statechange: { from: PlayerState; to: PlayerState };
 
+  // Controls
   volumechange: VolumeChangePayload;
   ratechange: PlaybackRate;
 
+  // Quality
   qualitiesavailable: QualityLevel[];
   qualitychange: QualityLevel;
 
-  error: ErrorPayload;
+  // Normalization
+  normalizationchange: NormalizationChangePayload;
 
+  // Error / lifecycle
+  error: ErrorPayload;
   dispose: void;
 }
 
@@ -85,10 +101,11 @@ export class PlayerError extends Error {
   constructor(
     message: string,
     public readonly code: PlayerErrorCode = PlayerErrorCode.UNKNOWN,
-    public readonly cause?: unknown
+    public readonly cause?: unknown,
   ) {
     super(message);
     this.name = "PlayerError";
+
     if (typeof (Error as any).captureStackTrace === "function") {
       (Error as any).captureStackTrace(this, PlayerError);
     }
@@ -106,7 +123,7 @@ export class PlayerError extends Error {
       return new PlayerError(
         "Loading aborted",
         PlayerErrorCode.LOAD_ABORTED,
-        error
+        error,
       );
     }
 
