@@ -6,7 +6,7 @@ const VALID_TRANSITIONS: Record<PlayerState, PlayerState[]> = {
   ready: ["playing", "loading", "idle", "disposed"],
   playing: ["paused", "buffering", "ready", "error", "idle", "disposed"],
   paused: ["playing", "ready", "loading", "idle", "disposed"],
-  buffering: ["playing", "paused", "error", "idle", "disposed"],
+  buffering: ["playing", "paused", "ready", "error", "idle", "disposed"],
   error: ["loading", "idle", "disposed"],
   disposed: [],
 };

@@ -24,6 +24,41 @@ import {
   LoudnessNormalizationOptions,
 } from "../audio/normalization";
 
+function inferLoadErrorCode(error: unknown): PlayerErrorCode {
+  if (error instanceof PlayerError) {
+    return error.code;
+  }
+
+  if (
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.message === "Aborted")
+  ) {
+    return PlayerErrorCode.LOAD_ABORTED;
+  }
+
+  if (error instanceof TypeError) {
+    return PlayerErrorCode.LOAD_NETWORK;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+
+    if (message.includes("network")) {
+      return PlayerErrorCode.LOAD_NETWORK;
+    }
+
+    if (message.includes("decode")) {
+      return PlayerErrorCode.LOAD_DECODE;
+    }
+
+    if (message.includes("not supported") || message.includes("unsupported")) {
+      return PlayerErrorCode.LOAD_NOT_SUPPORTED;
+    }
+  }
+
+  return PlayerErrorCode.UNKNOWN;
+}
+
 type ResolvedPlayerOptions = Required<
   Omit<PlayerOptions, "Hls" | "loudnessNormalization">
 > & {
@@ -175,6 +210,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._cancellation?.cancel();
     this._cancellation = new CancellationToken();
     const signal = this._cancellation.signal;
+    const isCurrentLoad = (): boolean => this._cancellation?.signal === signal;
 
     await this.cleanup();
 
@@ -253,14 +289,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
         err instanceof CancellationError ||
         (err instanceof DOMException && err.name === "AbortError")
       ) {
-        this._stateManager.transition("idle");
+        if (isCurrentLoad()) {
+          this._stateManager.transition("idle");
+        }
         return;
       }
 
       this._stateManager.transition("error");
       const playerError = PlayerError.fromError(
         err,
-        PlayerErrorCode.LOAD_DECODE,
+        inferLoadErrorCode(err),
       );
       this.emit("error", {
         code: playerError.code,

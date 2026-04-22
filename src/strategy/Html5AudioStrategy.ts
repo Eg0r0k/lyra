@@ -5,6 +5,7 @@ import {
   PlaybackStrategyEvents,
   StrategyInitOptions,
 } from "./IPlaybackStrategy";
+import { PlayerError, PlayerErrorCode } from "../types/events";
 
 export class HTML5Strategy
   extends EventEmitter<PlaybackStrategyEvents>
@@ -73,7 +74,7 @@ export class HTML5Strategy
 
         const onError = () => {
           cleanup();
-          reject(new Error(this.getMediaErrorMessage()));
+          reject(this.createMediaError());
         };
 
         const timer = setTimeout(() => {
@@ -102,7 +103,7 @@ export class HTML5Strategy
         };
         const onError = () => {
           cleanup();
-          reject(new Error(this.getMediaErrorMessage()));
+          reject(this.createMediaError());
         };
         const cleanup = () => {
           this._audio.removeEventListener("canplay", onCanPlay);
@@ -141,7 +142,7 @@ export class HTML5Strategy
 
         const onError = () => {
           cleanup();
-          reject(new Error(this.getMediaErrorMessage()));
+          reject(this.createMediaError());
         };
 
         const timer = setTimeout(() => {
@@ -200,25 +201,51 @@ export class HTML5Strategy
 
   attachErrorHandler(): void {
     this._audio.addEventListener("error", () => {
-      this.emit("error", new Error(this.getMediaErrorMessage()));
+      this.emit("error", this.createMediaError());
     });
   }
 
-  private getMediaErrorMessage(): string {
+  private createMediaError(): PlayerError {
     const error = this._audio.error;
-    if (!error) return "Unknown media error";
+
+    if (!error) {
+      return new PlayerError(
+        "Unknown media error",
+        PlayerErrorCode.PLAYBACK_FAILED,
+      );
+    }
 
     switch (error.code) {
       case MediaError.MEDIA_ERR_ABORTED:
-        return "Media loading aborted";
+        return new PlayerError(
+          "Media loading aborted",
+          PlayerErrorCode.LOAD_ABORTED,
+          error,
+        );
       case MediaError.MEDIA_ERR_NETWORK:
-        return "Network error while loading media";
+        return new PlayerError(
+          "Network error while loading media",
+          PlayerErrorCode.LOAD_NETWORK,
+          error,
+        );
       case MediaError.MEDIA_ERR_DECODE:
-        return "Media decoding error";
+        return new PlayerError(
+          "Media decoding error",
+          PlayerErrorCode.LOAD_DECODE,
+          error,
+        );
       case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-        return "Media format not supported";
+        return new PlayerError(
+          "Media format not supported",
+          PlayerErrorCode.LOAD_NOT_SUPPORTED,
+          error,
+        );
       default:
-        return error.message || "Unknown media error";
+        return new PlayerError(
+          error.message || "Unknown media error",
+          PlayerErrorCode.PLAYBACK_FAILED,
+          error,
+        );
     }
   }
 
