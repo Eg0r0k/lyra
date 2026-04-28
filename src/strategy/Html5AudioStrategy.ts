@@ -21,7 +21,6 @@ export class HTML5Strategy
   constructor() {
     super();
     this._audio = new Audio();
-    this._audio.crossOrigin = "anonymous";
     this.setupEventListeners();
   }
 
@@ -94,6 +93,11 @@ export class HTML5Strategy
     }
 
     if (options.sourceUrl) {
+      if (this.isCrossOrigin(options.sourceUrl)) {
+        this._audio.crossOrigin = "anonymous";
+      } else {
+        this._audio.removeAttribute("crossorigin");
+      }
       this._audio.src = options.sourceUrl;
 
       await new Promise<void>((resolve, reject) => {
@@ -158,6 +162,15 @@ export class HTML5Strategy
       this._isReady = true;
     }
   }
+
+  private isCrossOrigin(url: string): boolean {
+    try {
+      return new URL(url).origin !== window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
   private setupEventListeners(): void {
     this._audio.addEventListener("play", () => {
       this.emit("play");

@@ -86,6 +86,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private _loudnessMetadata: LoudnessMetadata | null = null;
 
+  private _isAudioUnlocked = false;
+  private _isAudioUnlocking = false;
   constructor(options: PlayerOptions = {}) {
     super();
 
@@ -166,11 +168,93 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   get audioContext(): AudioContext {
     if (!this._ctx) {
-      this._ctx = new AudioContext({
+      // For broader browser support, we check for both AudioContext and webkitAudioContext
+      const WebAudioCtx: typeof AudioContext =
+        window.AudioContext ?? (window as any).webkitAudioContext;
+
+      this._ctx = new WebAudioCtx({
         latencyHint: this._options.latencyHint,
       });
     }
     return this._ctx;
+  }
+
+  async getAudioContext(): Promise<AudioContext> {
+    const ctx = this.audioContext;
+
+    if (ctx.state === "closed") {
+      this._ctx = null;
+      return this.audioContext;
+    }
+
+    if (ctx.state === "suspended") {
+      await this.unfreezeAudioContext();
+    }
+
+    return ctx;
+  }
+
+  async freezeAudioContext(): Promise<void> {
+    if (!this._ctx || this._ctx.state === "closed") return;
+
+    if (typeof this._ctx.suspend === "undefined") {
+      return Promise.resolve();
+    }
+
+    return this._ctx.suspend();
+  }
+
+  async unfreezeAudioContext(): Promise<void> {
+    if (!this._ctx || this._ctx.state === "closed") return;
+
+    if (typeof this._ctx.resume === "undefined") {
+      return Promise.resolve();
+    }
+
+    return this._ctx.resume();
+  }
+
+  isAudioContextFrozen(): boolean {
+    return this._ctx?.state === "suspended";
+  }
+
+  async unlockAudio(): Promise<void> {
+    if (this._isAudioUnlocking || this._isAudioUnlocked) return;
+
+    this._isAudioUnlocking = true;
+
+    try {
+      const ctx = await this.getAudioContext();
+
+      await new Promise<void>((resolve, reject) => {
+        const placeholder = ctx.createBuffer(1, 1, 22050);
+
+        let source: AudioBufferSourceNode | null = ctx.createBufferSource();
+        source.buffer = placeholder;
+        source.connect(ctx.destination);
+
+        source.onended = () => {
+          source!.disconnect(0);
+          source!.buffer = null;
+          source = null;
+
+          this._isAudioUnlocked = true;
+          this._isAudioUnlocking = false;
+          resolve();
+        };
+
+        try {
+          source.start(0);
+        } catch (err) {
+          source.disconnect(0);
+          source = null;
+          reject(err);
+        }
+      });
+    } catch (err) {
+      this._isAudioUnlocking = false;
+      throw err;
+    }
   }
 
   get graph(): AudioGraph | null {
@@ -296,10 +380,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       }
 
       this._stateManager.transition("error");
-      const playerError = PlayerError.fromError(
-        err,
-        inferLoadErrorCode(err),
-      );
+      const playerError = PlayerError.fromError(err, inferLoadErrorCode(err));
       this.emit("error", {
         code: playerError.code,
         message: playerError.message,
@@ -321,9 +402,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    if (this._ctx?.state === "suspended") {
-      await this._ctx.resume();
-    }
+    await this.getAudioContext();
 
     try {
       await this._currentStrategy.play();
