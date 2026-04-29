@@ -51,6 +51,7 @@ export class AudioGraph {
 
   private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private _fadeResolve: (() => void) | null = null;
+  private _preFadeVolume: number = 1;
 
   constructor(ctx: AudioContext, options: AudioGraphOptions = {}) {
     const { analyser: aOpts = {}, bands } = options;
@@ -239,6 +240,8 @@ export class AudioGraph {
     durationSec: number,
     fromVolume?: number,
   ): Promise<void> {
+    this._preFadeVolume = this._outputGain.gain.value;
+
     this.cancelFade();
 
     const now = this._ctx.currentTime;
@@ -279,6 +282,7 @@ export class AudioGraph {
       this._fadeTimer = setTimeout(() => {
         gain.cancelScheduledValues(this._ctx.currentTime);
         gain.setValueAtTime(finalValue, this._ctx.currentTime);
+        this._preFadeVolume = finalValue;
         this._fadeTimer = null;
         this._fadeResolve = null;
         resolve();
@@ -298,7 +302,7 @@ export class AudioGraph {
     if (resolve) {
       const now = this._ctx.currentTime;
       this._outputGain.gain.cancelScheduledValues(now);
-      this._outputGain.gain.setValueAtTime(this._outputGain.gain.value, now);
+      this._outputGain.gain.setValueAtTime(this._preFadeVolume, now);
       resolve();
     }
   }

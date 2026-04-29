@@ -131,6 +131,55 @@ describe("AudioGraph", () => {
     expect(outputGain.gain.value).toBe(1);
   });
 
+  it("restores gain to previous value when fade is cancelled mid-flight", async () => {
+    vi.useFakeTimers();
+    const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
+    const outputGain = getLatestGainNode() as unknown as {
+      gain: {
+        value: number;
+        setValueAtTime: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    graph.setVolumeImmediate(0.5);
+    expect(outputGain.gain.value).toBe(0.5);
+
+    graph.fadeTo(0.8, 1);
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    graph.cancelFade();
+
+    expect(outputGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.5, expect.any(Number));
+    expect(outputGain.gain.value).toBe(0.5);
+
+    vi.useRealTimers();
+  });
+
+  it("maintains consistent volume across rapid fade cancellations", async () => {
+    vi.useFakeTimers();
+    player = new Player({ mode: "html5", volume: 0.8 });
+
+    await player.load("https://cdn.example.com/song.mp3");
+
+    await player.play();
+
+    for (let i = 0; i < 5; i++) {
+      player.fadeOut(0.5);
+      await vi.advanceTimersByTimeAsync(100);
+      player.cancelFade();
+    }
+
+    const outputGain = getLatestGainNode() as unknown as {
+      gain: { value: number };
+    };
+
+    expect(outputGain.gain.value).toBe(1);
+    expect(getLatestAudioElement().volume).toBe(0.8);
+
+    vi.useRealTimers();
+  });
+
   it("keeps HTML5 volume on the media element and applies graph gain before play starts", async () => {
     const playSpy = vi.spyOn(MockAudioElement.prototype, "play");
     player = new Player({ mode: "html5", autoplay: true, volume: 0.2 });

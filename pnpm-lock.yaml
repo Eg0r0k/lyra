@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       hls.js:
-        specifier: ^1.6.15
+        specifier: ^1.4.0
         version: 1.6.15
     devDependencies:
       '@types/node':
