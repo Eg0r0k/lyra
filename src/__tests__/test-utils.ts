@@ -10,24 +10,24 @@ type MockParam = {
 };
 
 function createAudioParam(initialValue: number): MockParam {
-  return {
+  const param: MockParam = {
     value: initialValue,
-    setValueAtTime(value: number) {
-      this.value = value;
-    },
-    setTargetAtTime(value: number) {
-      this.value = value;
-    },
-    linearRampToValueAtTime(value: number) {
-      this.value = value;
-    },
-    exponentialRampToValueAtTime(value: number) {
-      this.value = value;
-    },
-    cancelScheduledValues() {
-      // noop
-    },
+    setValueAtTime: vi.fn((value: number) => {
+      param.value = value;
+    }),
+    setTargetAtTime: vi.fn((value: number) => {
+      param.value = value;
+    }),
+    linearRampToValueAtTime: vi.fn((value: number) => {
+      param.value = value;
+    }),
+    exponentialRampToValueAtTime: vi.fn((value: number) => {
+      param.value = value;
+    }),
+    cancelScheduledValues: vi.fn(() => undefined),
   };
+
+  return param;
 }
 
 class MockAudioNode {
@@ -86,13 +86,17 @@ export class MockAudioContext {
   public state: AudioContextState = "running";
   public currentTime = 0;
   public readonly destination = new MockAudioNode() as unknown as AudioDestinationNode;
+  public readonly createdGains: MockGainNode[] = [];
+  public readonly createdBufferSources: MockBufferSourceNode[] = [];
 
   constructor(_options?: AudioContextOptions) {
     MockAudioContext.instances.push(this);
   }
 
   public createGain(): GainNode {
-    return new MockGainNode() as unknown as GainNode;
+    const node = new MockGainNode();
+    this.createdGains.push(node);
+    return node as unknown as GainNode;
   }
 
   public createAnalyser(): AnalyserNode {
@@ -108,7 +112,9 @@ export class MockAudioContext {
   }
 
   public createBufferSource(): AudioBufferSourceNode {
-    return new MockBufferSourceNode() as unknown as AudioBufferSourceNode;
+    const node = new MockBufferSourceNode();
+    this.createdBufferSources.push(node);
+    return node as unknown as AudioBufferSourceNode;
   }
 
   public async decodeAudioData(_arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
@@ -339,6 +345,24 @@ export function getLatestAudioContext(): MockAudioContext {
     throw new Error("No mock audio context was created");
   }
   return ctx;
+}
+
+export function getLatestGainNode(): GainNode {
+  const ctx = getLatestAudioContext();
+  const node = ctx.createdGains[ctx.createdGains.length - 1];
+  if (!node) {
+    throw new Error("No mock gain node was created");
+  }
+  return node as unknown as GainNode;
+}
+
+export function getLatestBufferSourceNode(): AudioBufferSourceNode {
+  const ctx = getLatestAudioContext();
+  const node = ctx.createdBufferSources[ctx.createdBufferSources.length - 1];
+  if (!node) {
+    throw new Error("No mock buffer source node was created");
+  }
+  return node as unknown as AudioBufferSourceNode;
 }
 
 export function createArrayBuffer(length = 16): ArrayBuffer {

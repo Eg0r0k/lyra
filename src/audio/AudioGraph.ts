@@ -225,6 +225,15 @@ export class AudioGraph {
     );
   }
 
+  setVolumeImmediate(volume: number): void {
+    this.cancelFade();
+    this._outputGain.gain.cancelScheduledValues(this._ctx.currentTime);
+    this._outputGain.gain.setValueAtTime(
+      Math.max(0, Math.min(1, volume)),
+      this._ctx.currentTime,
+    );
+  }
+
   fadeTo(
     targetVolume: number,
     durationSec: number,

@@ -464,7 +464,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   setVolume(value: number): void {
     this._volume = Volume(value);
 
-    if (this._audioGraph) {
+    if (this._currentStrategy instanceof HTML5Strategy) {
+      this._currentStrategy.setVolume(this._volume);
+    } else if (this._audioGraph) {
       this._audioGraph.setVolume(this._muted ? 0 : this._volume);
       this._currentStrategy?.setVolume(Volume(1));
     } else {
@@ -480,7 +482,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   setMuted(muted: boolean): void {
     this._muted = muted;
 
-    if (this._audioGraph) {
+    if (this._currentStrategy instanceof HTML5Strategy) {
+      this._currentStrategy.setMuted(muted);
+    } else if (this._audioGraph) {
       this._currentStrategy?.setMuted(false);
       this._audioGraph.setVolume(muted ? 0 : this._volume);
     } else {
@@ -529,7 +533,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       await this.play();
     }
 
-    const targetVol = this._muted ? 0 : this._volume;
+    const targetVol = this.getRestingGraphGain();
     await this._audioGraph.fadeTo(targetVol, durationSec, 0);
   }
 
@@ -541,13 +545,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
   async fadeOutAndPause(durationSec: number = 1): Promise<void> {
     await this.fadeOut(durationSec);
     this.pause();
-    void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
+    void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
   }
 
   async fadeOutAndStop(durationSec: number = 1): Promise<void> {
     await this.fadeOut(durationSec);
     this.stop();
-    void this._audioGraph?.fadeTo(this._muted ? 0 : this._volume, 0);
+    void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
   }
 
   cancelFade(): void {
@@ -692,14 +696,26 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
-    sourceNode.connect(this._audioGraph.input);
-
+    this._audioGraph.setVolumeImmediate(this.getRestingGraphGain());
     this._audioGraph.output.disconnect();
     this._audioGraph.output.connect(this.audioContext.destination);
+    sourceNode.connect(this._audioGraph.input);
 
-    this._audioGraph.setVolume(this._muted ? 0 : this._volume);
-    this._currentStrategy.setVolume(Volume(1));
-    this._currentStrategy.setMuted(false);
+    if (this._currentStrategy instanceof HTML5Strategy) {
+      this._currentStrategy.setVolume(this._volume);
+      this._currentStrategy.setMuted(this._muted);
+    } else {
+      this._currentStrategy.setVolume(Volume(1));
+      this._currentStrategy.setMuted(false);
+    }
+  }
+
+  private getRestingGraphGain(): number {
+    if (this._currentStrategy instanceof HTML5Strategy) {
+      return 1;
+    }
+
+    return this._muted ? 0 : this._volume;
   }
 
   private bindStrategyEvents(): void {

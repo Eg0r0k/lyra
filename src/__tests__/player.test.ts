@@ -402,15 +402,19 @@ describe("Player", () => {
 
       player.setVolume(1.5);
       expect(player.volume).toBe(1);
+      expect(getLatestAudioElement().volume).toBe(1);
 
       player.setVolume(-0.2);
       expect(player.volume).toBe(0);
+      expect(getLatestAudioElement().volume).toBe(0);
 
       player.setMuted(true);
       expect(player.muted).toBe(true);
+      expect(getLatestAudioElement().muted).toBe(true);
 
       player.toggleMute();
       expect(player.muted).toBe(false);
+      expect(getLatestAudioElement().muted).toBe(false);
 
       player.setPlaybackRate(32);
       expect(player.playbackRate).toBe(16);

@@ -5,14 +5,18 @@
  * - `AudioGraph` is also tested directly so EQ and analyser behavior can be
  *   asserted without depending on Player orchestration for every branch.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AudioGraph } from "../audio/AudioGraph";
 import { Player } from "../index";
 import {
   MockAudioContext,
+  MockAudioElement,
   createArrayBuffer,
+  getLatestBufferSourceNode,
+  getLatestAudioElement,
   getLatestAudioContext,
+  getLatestGainNode,
 } from "./test-utils";
 
 describe("AudioGraph", () => {
@@ -85,6 +89,49 @@ describe("AudioGraph", () => {
     expect(timeDomainData.length).toBeGreaterThan(0);
     expect(frequencyData[0]).toBe(64);
     expect(timeDomainData[0]).toBe(128);
+  });
+
+  it("keeps HTML5 volume on the media element and applies graph gain before play starts", async () => {
+    const playSpy = vi.spyOn(MockAudioElement.prototype, "play");
+    player = new Player({ mode: "html5", autoplay: true, volume: 0.2 });
+
+    await player.load("https://cdn.example.com/song.mp3");
+
+    const outputGain = getLatestGainNode() as unknown as {
+      gain: {
+        setValueAtTime: ReturnType<typeof vi.fn>;
+        setTargetAtTime: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    expect(outputGain.gain.setValueAtTime).toHaveBeenCalledWith(1, 0);
+    expect(outputGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
+      playSpy.mock.invocationCallOrder[0],
+    );
+    expect(getLatestAudioElement().volume).toBe(0.2);
+
+    playSpy.mockRestore();
+  });
+
+  it("applies initial graph volume immediately for webaudio autoplay before buffer start", async () => {
+    player = new Player({ mode: "webaudio", autoplay: true, volume: 0.2 });
+
+    await player.load({ data: createArrayBuffer() });
+
+    const outputGain = getLatestGainNode() as unknown as {
+      gain: {
+        setValueAtTime: ReturnType<typeof vi.fn>;
+        setTargetAtTime: ReturnType<typeof vi.fn>;
+      };
+    };
+    const bufferSource = getLatestBufferSourceNode() as unknown as {
+      start: ReturnType<typeof vi.fn>;
+    };
+
+    expect(outputGain.gain.setValueAtTime).toHaveBeenCalledWith(0.2, 0);
+    expect(outputGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
+      bufferSource.start.mock.invocationCallOrder[0],
+    );
   });
 
   it("player graph uses the shared audio context after load", async () => {
