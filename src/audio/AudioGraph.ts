@@ -272,10 +272,13 @@ export class AudioGraph {
     }
 
     const timerMs = durationSec * 1000 + FADE_SAFETY_MARGIN_MS;
+    const finalValue = isFadingToSilence ? 0 : endValue;
 
     return new Promise<void>((resolve) => {
       this._fadeResolve = resolve;
       this._fadeTimer = setTimeout(() => {
+        gain.cancelScheduledValues(this._ctx.currentTime);
+        gain.setValueAtTime(finalValue, this._ctx.currentTime);
         this._fadeTimer = null;
         this._fadeResolve = null;
         resolve();
