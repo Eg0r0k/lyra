@@ -71,6 +71,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private _stateManager: StateManager;
   private _sourceManager: SourceManager;
   private _audioGraph: AudioGraph | null = null;
+  private _graphSourceNode: AudioNode | null = null;
 
   private _currentStrategy: IPlaybackStrategy | null = null;
   private _currentHandler: ISourceHandler | null = null;
@@ -352,7 +353,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       signal.throwIfAborted();
 
-      this.setupAudioGraph();
       this.bindStrategyEvents();
       this.recomputeNormalization();
 
@@ -403,6 +403,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     await this.getAudioContext();
+
+    if (!this._audioGraph) {
+      this.setupAudioGraph();
+    }
 
     try {
       await this._currentStrategy.play();
@@ -670,6 +674,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._audioGraph?.dispose();
     this._audioGraph = null;
+    this._graphSourceNode = null;
     this._sourceManager.dispose();
     this._stateManager.dispose();
 
@@ -691,11 +696,17 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private setupAudioGraph(): void {
     if (!this._currentStrategy) return;
 
+    if (this._graphSourceNode) {
+      return;
+    }
+
     if (!this._audioGraph) {
       this._audioGraph = new AudioGraph(this.audioContext);
     }
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
+    this._graphSourceNode = sourceNode;
+
     this._audioGraph.setVolumeImmediate(this.getRestingGraphGain());
     this._audioGraph.output.disconnect();
     this._audioGraph.output.connect(this.audioContext.destination);
@@ -790,6 +801,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._currentStrategy?.dispose();
     this._currentStrategy = null;
+
+    this._graphSourceNode = null;
 
     this._currentHandler?.dispose();
     this._currentHandler = null;
