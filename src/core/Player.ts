@@ -349,6 +349,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
         loop: this._loop,
         preload: this._options.preload,
         metadata: prepared.metadata,
+        requiresCrossOrigin:
+          this._options.mode === "webaudio" || this._options.mode === "auto",
       });
 
       signal.throwIfAborted();

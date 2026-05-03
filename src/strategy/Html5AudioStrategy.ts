@@ -93,7 +93,10 @@ export class HTML5Strategy
     }
 
     if (options.sourceUrl) {
-      if (this.isCrossOrigin(options.sourceUrl)) {
+      if (
+        options.requiresCrossOrigin &&
+        this.isCrossOrigin(options.sourceUrl)
+      ) {
         this._audio.crossOrigin = "anonymous";
       } else {
         this._audio.removeAttribute("crossorigin");

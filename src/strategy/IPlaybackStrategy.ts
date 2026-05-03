@@ -23,6 +23,7 @@ export interface StrategyInitOptions {
   loop: boolean;
   preload: "none" | "metadata" | "auto";
   metadata?: Record<string, unknown>;
+  requiresCrossOrigin?: boolean;
 }
 
 export interface IPlaybackStrategy {
