@@ -73,6 +73,10 @@ export interface PlayerEventMap {
   // Error / lifecycle
   error: ErrorPayload;
   dispose: void;
+
+  // Context
+  contextinterrupted: void;
+  contextresumed: void;
 }
 
 export type PlayerEventName = keyof PlayerEventMap;

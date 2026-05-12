@@ -23,6 +23,7 @@ import {
   LoudnessMetadata,
   LoudnessNormalizationOptions,
 } from "../audio/normalization";
+import { playerLogger } from "../utils/Logger";
 
 function inferLoadErrorCode(error: unknown): PlayerErrorCode {
   if (error instanceof PlayerError) {
@@ -89,6 +90,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private _isAudioUnlocked = false;
   private _isAudioUnlocking = false;
+
+  private _previousCtxState: AudioContextState | null = null;
+
   constructor(options: PlayerOptions = {}) {
     super();
 
@@ -108,6 +112,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     };
 
     this._stateManager = new StateManager();
+
     this._sourceManager = new SourceManager({
       hlsConfig: this._options.hlsConfig,
       Hls: this._options.Hls,
@@ -122,6 +127,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this.emit("statechange", { from, to });
     });
   }
+
   get state(): PlayerState {
     return this._stateManager.state;
   }
@@ -169,14 +175,47 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   get audioContext(): AudioContext {
     if (!this._ctx) {
-      // For broader browser support, we check for both AudioContext and webkitAudioContext
       const WebAudioCtx: typeof AudioContext =
         window.AudioContext ?? (window as any).webkitAudioContext;
 
       this._ctx = new WebAudioCtx({
         latencyHint: this._options.latencyHint,
       });
+
+      this._previousCtxState = this._ctx.state;
+
+      this._ctx.onstatechange = () => {
+        if (!this._ctx) return;
+
+        const state = this._ctx.state;
+        const prevState = this._previousCtxState;
+
+        this._previousCtxState = state;
+
+        if (state === "interrupted") {
+          playerLogger.debug("AudioContext interrupted");
+          this.emit("contextinterrupted");
+        }
+
+        if (state === "suspended" && prevState === "interrupted") {
+          playerLogger.debug(
+            "AudioContext interrupted → suspended, auto-resuming",
+          );
+
+          void this.unfreezeAudioContext();
+        }
+
+        if (
+          state === "running" &&
+          (prevState === "suspended" || prevState === "interrupted")
+        ) {
+          playerLogger.debug("AudioContext resumed");
+          this.emit("contextresumed");
+          this._resyncStrategyClock();
+        }
+      };
     }
+
     return this._ctx;
   }
 
@@ -188,7 +227,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return this.audioContext;
     }
 
-    if (ctx.state === "suspended") {
+    if (ctx.state === "suspended" || ctx.state === "interrupted") {
       await this.unfreezeAudioContext();
     }
 
@@ -196,7 +235,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async freezeAudioContext(): Promise<void> {
-    if (!this._ctx || this._ctx.state === "closed") return;
+    if (!this._ctx || this._ctx.state === "closed") {
+      return;
+    }
 
     if (typeof this._ctx.suspend === "undefined") {
       return Promise.resolve();
@@ -206,7 +247,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async unfreezeAudioContext(): Promise<void> {
-    if (!this._ctx || this._ctx.state === "closed") return;
+    if (!this._ctx || this._ctx.state === "closed") {
+      return;
+    }
 
     if (typeof this._ctx.resume === "undefined") {
       return Promise.resolve();
@@ -219,8 +262,20 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._ctx?.state === "suspended";
   }
 
+  private _resyncStrategyClock(): void {
+    if (this._currentStrategy instanceof WebAudioStrategy) {
+      playerLogger.debug(
+        "Resyncing WebAudioStrategy clock after context resume",
+      );
+
+      this._currentStrategy.resyncStartTime();
+    }
+  }
+
   async unlockAudio(): Promise<void> {
-    if (this._isAudioUnlocking || this._isAudioUnlocked) return;
+    if (this._isAudioUnlocking || this._isAudioUnlocked) {
+      return;
+    }
 
     this._isAudioUnlocking = true;
 
@@ -231,24 +286,30 @@ export class Player extends EventEmitter<PlayerEventMap> {
         const placeholder = ctx.createBuffer(1, 1, 22050);
 
         let source: AudioBufferSourceNode | null = ctx.createBufferSource();
+
         source.buffer = placeholder;
         source.connect(ctx.destination);
 
         source.onended = () => {
-          source!.disconnect(0);
-          source!.buffer = null;
+          source?.disconnect();
+          if (source) {
+            source.buffer = null;
+          }
+
           source = null;
 
           this._isAudioUnlocked = true;
           this._isAudioUnlocking = false;
+
           resolve();
         };
 
         try {
           source.start(0);
         } catch (err) {
-          source.disconnect(0);
+          source.disconnect();
           source = null;
+
           reject(err);
         }
       });
@@ -293,17 +354,22 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     this._cancellation?.cancel();
+
     this._cancellation = new CancellationToken();
+
     const signal = this._cancellation.signal;
+
     const isCurrentLoad = (): boolean => this._cancellation?.signal === signal;
 
     await this.cleanup();
 
     this._stateManager.transition("loading");
+
     this.emit("loadstart");
 
     try {
       const handler = this._sourceManager.getHandler(normalized);
+
       this._currentHandler = handler;
 
       let strategyType =
@@ -312,17 +378,26 @@ export class Player extends EventEmitter<PlayerEventMap> {
           : this._options.mode;
 
       const preferred = handler.preferredStrategy();
+
       if (preferred !== "any" && preferred !== strategyType) {
-        console.warn(
-          `[Player] Source requires ${preferred} strategy, switching from ${strategyType}`,
+        playerLogger.warn(
+          `Source requires ${preferred} strategy, switching from ${strategyType}`,
         );
+
         strategyType = preferred;
       }
 
       this._currentStrategy = this.createStrategy(strategyType);
 
       const needsContext = strategyType === "webaudio";
+
       const ctx = needsContext ? this.audioContext : null;
+
+      playerLogger.debug(
+        "Preparing source",
+        normalized.type || "url",
+        normalized.url || normalized.data ? "data" : "",
+      );
 
       const prepared = await handler.prepare(
         normalized,
@@ -356,13 +431,21 @@ export class Player extends EventEmitter<PlayerEventMap> {
       signal.throwIfAborted();
 
       this.bindStrategyEvents();
+
       this.recomputeNormalization();
 
       this._stateManager.transition("ready");
-      this.emit("loadedmetadata", { duration: this.duration });
+
+      this.emit("loadedmetadata", {
+        duration: this.duration,
+      });
+
       this.emit("canplay");
 
+      playerLogger.debug("Load complete, duration:", this.duration);
+
       const capabilities = this._sourceManager.getActiveCapabilities();
+
       if (capabilities?.qualityLevels?.length) {
         this.emit("qualitiesavailable", capabilities.qualityLevels);
       }
@@ -378,16 +461,20 @@ export class Player extends EventEmitter<PlayerEventMap> {
         if (isCurrentLoad()) {
           this._stateManager.transition("idle");
         }
+
         return;
       }
 
       this._stateManager.transition("error");
+
       const playerError = PlayerError.fromError(err, inferLoadErrorCode(err));
+
       this.emit("error", {
         code: playerError.code,
         message: playerError.message,
         cause: playerError.cause,
       });
+
       throw playerError;
     }
   }
@@ -412,17 +499,24 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     try {
       await this._currentStrategy.play();
+
       this._stateManager.transition("playing");
+
+      playerLogger.debug("Playback started");
     } catch (error) {
+      playerLogger.error("Playback failed:", error);
+
       const playerError = PlayerError.fromError(
         error,
         PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
       );
+
       this.emit("error", {
         code: playerError.code,
         message: playerError.message,
         cause: playerError.cause,
       });
+
       throw playerError;
     }
   }
@@ -433,7 +527,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     this._currentStrategy.pause();
+
     this._stateManager.transition("paused");
+
+    playerLogger.debug("Playback paused");
   }
 
   async togglePlay(): Promise<void> {
@@ -445,25 +542,38 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   stop(): void {
-    if (!this._currentStrategy) return;
+    if (!this._currentStrategy) {
+      return;
+    }
 
     this._currentStrategy.stop();
+
     this._stateManager.transition("ready");
+
     this.emit("stop");
+
+    playerLogger.debug("Playback stopped");
   }
 
   seek(time: number): void {
-    if (!this._currentStrategy) return;
+    if (!this._currentStrategy) {
+      return;
+    }
 
     const safeTime = TimeSeconds(Math.max(0, Math.min(time, this.duration)));
 
+    playerLogger.debug("Seeking to:", safeTime);
+
     this.emit("seeking", safeTime);
+
     this._currentStrategy.seek(safeTime);
+
     this.emit("seeked", safeTime);
   }
 
   seekPercent(percent: number): void {
     const time = this.duration * Math.max(0, Math.min(1, percent));
+
     this.seek(time);
   }
 
@@ -474,6 +584,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._currentStrategy.setVolume(this._volume);
     } else if (this._audioGraph) {
       this._audioGraph.setVolume(this._muted ? 0 : this._volume);
+
       this._currentStrategy?.setVolume(Volume(1));
     } else {
       this._currentStrategy?.setVolume(this._volume);
@@ -492,12 +603,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._currentStrategy.setMuted(muted);
     } else if (this._audioGraph) {
       this._currentStrategy?.setMuted(false);
+
       this._audioGraph.setVolume(muted ? 0 : this._volume);
     } else {
       this._currentStrategy?.setMuted(muted);
     }
 
-    this.emit("volumechange", { volume: this._volume, muted: this._muted });
+    this.emit("volumechange", {
+      volume: this._volume,
+      muted: this._muted,
+    });
   }
 
   toggleMute(): void {
@@ -506,25 +621,23 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   setPlaybackRate(rate: number): void {
     this._playbackRate = PlaybackRate(rate);
+
     this._currentStrategy?.setPlaybackRate(this._playbackRate);
+
     this.emit("ratechange", this._playbackRate);
   }
 
   setLoop(loop: boolean): void {
     this._loop = loop;
+
     this._currentStrategy?.setLoop(loop);
   }
 
-  async setSinkId(deviceId: string): Promise<void> {
-    if (!this._currentStrategy) return;
-
-    if ("setSinkId" in this._currentStrategy) {
-      await (this._currentStrategy as any).setSinkId(deviceId);
-    }
-  }
-
   async fadeTo(volume: number, durationSec: number = 1): Promise<void> {
-    if (!this._audioGraph) return;
+    if (!this._audioGraph) {
+      return;
+    }
+
     await this._audioGraph.fadeTo(
       Math.max(0, Math.min(1, volume)),
       durationSec,
@@ -532,31 +645,42 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async fadeIn(durationSec: number = 1): Promise<void> {
-    if (!this._audioGraph || !this._currentStrategy) return;
+    if (!this._audioGraph || !this._currentStrategy) {
+      return;
+    }
 
     if (!this.isPlaying) {
       await this._audioGraph.fadeTo(0, 0);
+
       await this.play();
     }
 
     const targetVol = this.getRestingGraphGain();
+
     await this._audioGraph.fadeTo(targetVol, durationSec, 0);
   }
 
   async fadeOut(durationSec: number = 1): Promise<void> {
-    if (!this._audioGraph) return;
+    if (!this._audioGraph) {
+      return;
+    }
+
     await this._audioGraph.fadeTo(0, durationSec);
   }
 
   async fadeOutAndPause(durationSec: number = 1): Promise<void> {
     await this.fadeOut(durationSec);
+
     this.pause();
+
     void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
   }
 
   async fadeOutAndStop(durationSec: number = 1): Promise<void> {
     await this.fadeOut(durationSec);
+
     this.stop();
+
     void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
   }
 
@@ -566,6 +690,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   setLoudnessMetadata(metadata: LoudnessMetadata | null): void {
     this._loudnessMetadata = metadata;
+
     this.recomputeNormalization();
   }
 
@@ -575,16 +700,19 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   clearLoudnessMetadata(): void {
     this._loudnessMetadata = null;
+
     this.recomputeNormalization();
   }
 
   setNormalizationEnabled(enabled: boolean): void {
     this._options.loudnessNormalization.enabled = enabled;
+
     this.recomputeNormalization();
   }
 
   setTargetLufs(targetLufs: number): void {
     this._options.loudnessNormalization.targetLufs = targetLufs;
+
     this.recomputeNormalization();
   }
 
@@ -593,22 +721,27 @@ export class Player extends EventEmitter<PlayerEventMap> {
       ...this._options.loudnessNormalization,
       ...options,
     };
+
     this.recomputeNormalization();
   }
 
   recomputeNormalization(): void {
-    if (!this._audioGraph) return;
+    if (!this._audioGraph) {
+      return;
+    }
 
     const opts = this._options.loudnessNormalization;
 
     if (!opts.enabled || !this._loudnessMetadata) {
       this._audioGraph.resetNormalization();
+
       this.emit("normalizationchange", {
         enabled: false,
         gainDb: 0,
         targetLufs: opts.targetLufs,
         metadata: this._loudnessMetadata,
       });
+
       return;
     }
 
@@ -634,6 +767,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   resetNormalization(): void {
     this._audioGraph?.resetNormalization();
+
     this.emit("normalizationchange", {
       enabled: false,
       gainDb: 0,
@@ -648,10 +782,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   setQuality(level: number): void {
     const capabilities = this._sourceManager.getActiveCapabilities();
+
     capabilities?.setQuality?.(level);
 
     const levels = this.getQualityLevels();
+
     const current = levels[level];
+
     if (current) {
       this.emit("qualitychange", current);
     }
@@ -664,23 +801,37 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async dispose(): Promise<void> {
-    if (this._stateManager.isDisposed) return;
+    if (this._stateManager.isDisposed) {
+      return;
+    }
+
+    playerLogger.debug("Disposing player");
 
     this._cancellation?.cancel();
+
     await this.cleanup();
 
-    if (this._ctx?.state !== "closed") {
-      await this._ctx?.close();
+    if (this._ctx) {
+      this._ctx.onstatechange = null;
+
+      if (this._ctx.state !== "closed") {
+        await this._ctx.close();
+      }
     }
+
     this._ctx = null;
 
     this._audioGraph?.dispose();
     this._audioGraph = null;
+
     this._graphSourceNode = null;
+
     this._sourceManager.dispose();
+
     this._stateManager.dispose();
 
     this.emit("dispose");
+
     this.removeAllListeners();
   }
 
@@ -688,15 +839,19 @@ export class Player extends EventEmitter<PlayerEventMap> {
     switch (type) {
       case "html5":
         return new HTML5Strategy();
+
       case "webaudio":
         return new WebAudioStrategy();
+
       default:
         return new HTML5Strategy();
     }
   }
 
   private setupAudioGraph(): void {
-    if (!this._currentStrategy) return;
+    if (!this._currentStrategy) {
+      return;
+    }
 
     if (this._graphSourceNode) {
       return;
@@ -707,18 +862,24 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     const sourceNode = this._currentStrategy.connectToGraph(this.audioContext);
+
     this._graphSourceNode = sourceNode;
 
     this._audioGraph.setVolumeImmediate(this.getRestingGraphGain());
+
     this._audioGraph.output.disconnect();
+
     this._audioGraph.output.connect(this.audioContext.destination);
+
     sourceNode.connect(this._audioGraph.input);
 
     if (this._currentStrategy instanceof HTML5Strategy) {
       this._currentStrategy.setVolume(this._volume);
+
       this._currentStrategy.setMuted(this._muted);
     } else {
       this._currentStrategy.setVolume(Volume(1));
+
       this._currentStrategy.setMuted(false);
     }
   }
@@ -732,7 +893,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   private bindStrategyEvents(): void {
-    if (!this._currentStrategy) return;
+    if (!this._currentStrategy) {
+      return;
+    }
 
     this._currentStrategy.on("play", () => {
       this.emit("play");
@@ -748,6 +911,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._currentStrategy.on("ended", () => {
       this._stateManager.transition("ready");
+
       this.emit("ended");
     });
 
@@ -773,6 +937,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._currentStrategy.on("waiting", () => {
       this._stateManager.transition("buffering");
+
       this.emit("waiting");
     });
 
@@ -780,15 +945,18 @@ export class Player extends EventEmitter<PlayerEventMap> {
       if (this._stateManager.is("buffering")) {
         this._stateManager.transition("playing");
       }
+
       this.emit("playing");
     });
 
     this._currentStrategy.on("error", (error) => {
       this._stateManager.transition("error");
+
       const playerError = PlayerError.fromError(
         error,
         PlayerErrorCode.PLAYBACK_FAILED,
       );
+
       this.emit("error", {
         code: playerError.code,
         message: playerError.message,
@@ -799,6 +967,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private async cleanup(): Promise<void> {
     this._audioGraph?.cancelFade();
+
     this._audioGraph?.resetNormalization();
 
     this._currentStrategy?.dispose();
@@ -814,6 +983,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     for (const url of this._objectUrls) {
       URL.revokeObjectURL(url);
     }
+
     this._objectUrls.clear();
 
     this._stateManager.reset();

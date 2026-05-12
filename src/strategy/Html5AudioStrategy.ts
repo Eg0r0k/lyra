@@ -6,6 +6,42 @@ import {
   StrategyInitOptions,
 } from "./IPlaybackStrategy";
 import { PlayerError, PlayerErrorCode } from "../types/events";
+import { playerLogger } from "../utils/Logger";
+
+/**
+ * HTML5-based playback strategy built on top of the native
+ * {@link HTMLAudioElement} API.
+ *
+ * This strategy is optimized for:
+ * - streaming playback
+ * - HLS/media element integrations
+ * - browser-native buffering
+ * - low CPU usage
+ *
+ * Internally it wraps a single {@link HTMLAudioElement} instance
+ * and forwards native media events through the player event system.
+ *
+ * @remarks
+ * Unlike {@link WebAudioStrategy}, this strategy relies on the browser's
+ * built-in media pipeline and does not decode audio manually.
+ *
+ * @example
+ * ```ts
+ * const strategy = new HTML5Strategy();
+ *
+ * await strategy.initialize({
+ *   sourceUrl: "/music.mp3",
+ *   audioContext,
+ *   volume: 1,
+ *   muted: false,
+ *   playbackRate: 1,
+ *   loop: false,
+ *   preload: "auto",
+ * });
+ *
+ * await strategy.play();
+ * ```
+ */
 
 export class HTML5Strategy
   extends EventEmitter<PlaybackStrategyEvents>
@@ -14,10 +50,57 @@ export class HTML5Strategy
   readonly id = "html5";
 
   private _audio: HTMLAudioElement;
+  /**
+   * Cached MediaElementAudioSourceNode used for AudioGraph integration.
+   *
+   * @remarks
+   * Can only be created once per media element.
+   */
   private _sourceNode: MediaElementAudioSourceNode | null = null;
   private _isReady = false;
   private _wasBuffering = false;
 
+  private _onPlay = () => {
+    this.emit("play");
+  };
+  private _onPause = () => {
+    if (!this._audio.ended) {
+      this.emit("pause");
+    }
+  };
+  private _onCanPlayThrough = () => {
+    this.emit("canplaythrough");
+  };
+  private _onWaiting = () => {
+    this._wasBuffering = true;
+    this.emit("waiting");
+  };
+  private _onPlaying = () => {
+    if (this._wasBuffering) {
+      this._wasBuffering = false;
+      this.emit("buffered");
+    }
+    this.emit("playing");
+  };
+  private _onEnded = () => {
+    this.emit("ended");
+  };
+  private _onTimeUpdate = () => {
+    this.emit("timeupdate", TimeSeconds(this._audio.currentTime));
+  };
+  private _onDurationChange = () => {
+    this.emit("durationchange", TimeSeconds(this._audio.duration));
+  };
+  private _onError = () => {
+    this.emit("error", this.createMediaError());
+  };
+  /**
+   * Creates a new HTML5 playback strategy instance.
+   *
+   * @remarks
+   * Automatically creates an internal {@link HTMLAudioElement}
+   * and binds all required media event listeners.
+   */
   constructor() {
     super();
     this._audio = new Audio();
@@ -38,6 +121,24 @@ export class HTML5Strategy
   getMediaElement(): HTMLMediaElement {
     return this._audio;
   }
+
+  /**
+   * Initializes media playback and loads the provided source.
+   *
+   * Supports:
+   * - direct source URLs
+   * - pre-attached media
+   * - external streaming integrations
+   *
+   * @param options Strategy initialization options.
+   *
+   * @throws {PlayerError}
+   * Thrown when media loading fails.
+   *
+   * @throws {Error}
+   * Thrown when media loading times out.
+   */
+
   async initialize(options: StrategyInitOptions): Promise<void> {
     this._audio.volume = options.volume;
     this._audio.muted = options.muted;
@@ -175,50 +276,18 @@ export class HTML5Strategy
   }
 
   private setupEventListeners(): void {
-    this._audio.addEventListener("play", () => {
-      this.emit("play");
-    });
-
-    this._audio.addEventListener("pause", () => {
-      if (!this._audio.ended) {
-        this.emit("pause");
-      }
-    });
-
-    this._audio.addEventListener("canplaythrough", () => {
-      this.emit("canplaythrough");
-    });
-
-    this._audio.addEventListener("waiting", () => {
-      this._wasBuffering = true;
-      this.emit("waiting");
-    });
-
-    this._audio.addEventListener("playing", () => {
-      if (this._wasBuffering) {
-        this._wasBuffering = false;
-        this.emit("buffered");
-      }
-      this.emit("playing");
-    });
-
-    this._audio.addEventListener("ended", () => {
-      this.emit("ended");
-    });
-
-    this._audio.addEventListener("timeupdate", () => {
-      this.emit("timeupdate", TimeSeconds(this._audio.currentTime));
-    });
-
-    this._audio.addEventListener("durationchange", () => {
-      this.emit("durationchange", TimeSeconds(this._audio.duration));
-    });
+    this._audio.addEventListener("play", this._onPlay);
+    this._audio.addEventListener("pause", this._onPause);
+    this._audio.addEventListener("canplaythrough", this._onCanPlayThrough);
+    this._audio.addEventListener("waiting", this._onWaiting);
+    this._audio.addEventListener("playing", this._onPlaying);
+    this._audio.addEventListener("ended", this._onEnded);
+    this._audio.addEventListener("timeupdate", this._onTimeUpdate);
+    this._audio.addEventListener("durationchange", this._onDurationChange);
   }
 
   attachErrorHandler(): void {
-    this._audio.addEventListener("error", () => {
-      this.emit("error", this.createMediaError());
-    });
+    this._audio.addEventListener("error", this._onError);
   }
 
   private createMediaError(): PlayerError {
@@ -264,7 +333,13 @@ export class HTML5Strategy
         );
     }
   }
-
+  /**
+   * Starts or resumes playback.
+   *
+   * @throws {DOMException}
+   * Browser playback restrictions may reject playback
+   * if user interaction has not occurred yet.
+   */
   async play(): Promise<void> {
     await this._audio.play();
   }
@@ -301,6 +376,17 @@ export class HTML5Strategy
   setLoop(loop: boolean): void {
     this._audio.loop = loop;
   }
+  /**
+   * Connects media element output into WebAudio graph.
+   *
+   * @remarks
+   * MediaElementAudioSourceNode can only be created once
+   * per HTMLMediaElement instance.
+   *
+   * @param ctx Audio context used for graph integration.
+   *
+   * @returns Connected audio node.
+   */
   connectToGraph(ctx: AudioContext): AudioNode {
     if (!this._sourceNode) {
       this._sourceNode = ctx.createMediaElementSource(this._audio);
@@ -310,17 +396,25 @@ export class HTML5Strategy
   getAudioElement(): HTMLAudioElement {
     return this._audio;
   }
-
-  async setSinkId(deviceId: string): Promise<void> {
-    if ("setSinkId" in this._audio) {
-      await (this._audio as any).setSinkId(deviceId);
-    }
-  }
-
+  /**
+   * Releases all resources, listeners and media references.
+   *
+   * After calling dispose the strategy becomes unusable.
+   */
   dispose(): void {
+    playerLogger.debug("HTML5Strategy dispose");
     this._audio.pause();
     this._audio.src = "";
     this._audio.load();
+    this._audio.removeEventListener("play", this._onPlay);
+    this._audio.removeEventListener("pause", this._onPause);
+    this._audio.removeEventListener("canplaythrough", this._onCanPlayThrough);
+    this._audio.removeEventListener("waiting", this._onWaiting);
+    this._audio.removeEventListener("playing", this._onPlaying);
+    this._audio.removeEventListener("ended", this._onEnded);
+    this._audio.removeEventListener("timeupdate", this._onTimeUpdate);
+    this._audio.removeEventListener("durationchange", this._onDurationChange);
+    this._audio.removeEventListener("error", this._onError);
     this._sourceNode = null;
     this._isReady = false;
     this.removeAllListeners();

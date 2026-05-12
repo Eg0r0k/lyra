@@ -72,7 +72,9 @@ class MockBufferSourceNode extends MockAudioNode {
   public loop = false;
   public onended: (() => void) | null = null;
   public readonly playbackRate: MockParam = createAudioParam(1);
-  public readonly start = vi.fn((_when?: number, _offset?: number) => undefined);
+  public readonly start = vi.fn(
+    (_when?: number, _offset?: number) => undefined,
+  );
   public readonly stop = vi.fn(() => {
     this.onended?.();
   });
@@ -85,12 +87,23 @@ export class MockAudioContext {
 
   public state: AudioContextState = "running";
   public currentTime = 0;
-  public readonly destination = new MockAudioNode() as unknown as AudioDestinationNode;
+  public onstatechange: ((this: AudioContext, ev: Event) => unknown) | null =
+    null;
+  public readonly destination =
+    new MockAudioNode() as unknown as AudioDestinationNode;
   public readonly createdGains: MockGainNode[] = [];
   public readonly createdBufferSources: MockBufferSourceNode[] = [];
 
   constructor(_options?: AudioContextOptions) {
     MockAudioContext.instances.push(this);
+  }
+
+  public setState(newState: AudioContextState): void {
+    this.state = newState;
+    this.onstatechange?.call(
+      this as unknown as AudioContext,
+      new Event("statechange"),
+    );
   }
 
   public createGain(): GainNode {
@@ -107,7 +120,9 @@ export class MockAudioContext {
     return new MockBiquadFilterNode() as unknown as BiquadFilterNode;
   }
 
-  public createMediaElementSource(_audio: HTMLMediaElement): MediaElementAudioSourceNode {
+  public createMediaElementSource(
+    _audio: HTMLMediaElement,
+  ): MediaElementAudioSourceNode {
     return new MockMediaElementSourceNode() as unknown as MediaElementAudioSourceNode;
   }
 
@@ -117,7 +132,9 @@ export class MockAudioContext {
     return node as unknown as AudioBufferSourceNode;
   }
 
-  public async decodeAudioData(_arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
+  public async decodeAudioData(
+    _arrayBuffer: ArrayBuffer,
+  ): Promise<AudioBuffer> {
     if (MockAudioContext.decodeError) {
       throw MockAudioContext.decodeError;
     }
@@ -369,7 +386,9 @@ export function createArrayBuffer(length = 16): ArrayBuffer {
   return new Uint8Array(length).buffer;
 }
 
-export function mockFetchSuccess(arrayBuffer: ArrayBuffer = createArrayBuffer()): void {
+export function mockFetchSuccess(
+  arrayBuffer: ArrayBuffer = createArrayBuffer(),
+): void {
   fetchMock.mockResolvedValue({
     ok: true,
     status: 200,
@@ -385,7 +404,10 @@ export function createAbortableFetchPromise(): {
   const abortSpy = vi.fn();
 
   const promise = new Promise<Response>((_resolve, reject) => {
-    fetchMock.mockImplementationOnce(((_input: RequestInfo | URL, init?: RequestInit) => {
+    fetchMock.mockImplementationOnce(((
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
       init?.signal?.addEventListener("abort", () => {
         abortSpy();
         reject(new DOMException("Aborted", "AbortError"));

@@ -1,4 +1,5 @@
 import { PlayerState } from "../types/index";
+import { playerLogger } from "../utils/Logger";
 
 const VALID_TRANSITIONS: Record<PlayerState, PlayerState[]> = {
   idle: ["loading", "disposed"],
@@ -33,9 +34,8 @@ export class StateManager {
     const validNext = VALID_TRANSITIONS[this._state];
 
     if (!validNext.includes(to)) {
-      console.warn(
-        `Invalid state transition: ${this._state} -> ${to}. ` +
-          `Valid transitions: ${validNext.join(", ")}`
+      playerLogger.warn(
+        `Invalid state transition: ${this._state} -> ${to}. Valid transitions: ${validNext.join(", ")}`,
       );
       return false;
     }
@@ -44,11 +44,13 @@ export class StateManager {
 
     this._state = to;
 
+    playerLogger.debug(`State: ${from} -> ${to}`);
+
     for (const cb of this._callbacks) {
       try {
         cb({ from, to });
       } catch (err) {
-        console.error("Error in state change callback:", err);
+        playerLogger.error("Error in state change callback:", err);
       }
     }
     return true;

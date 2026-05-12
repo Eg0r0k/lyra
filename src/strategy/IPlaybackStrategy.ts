@@ -1,5 +1,8 @@
 import { PlaybackRate, TimeSeconds, Volume } from "../types/branded";
 
+/**
+ * Events emitted by playback strategies.
+ */
 export type PlaybackStrategyEvents = {
   play: void;
   pause: void;
@@ -12,7 +15,9 @@ export type PlaybackStrategyEvents = {
   canplaythrough: void;
   buffered: void;
 };
-
+/**
+ * Base contract implemented by all playback strategies.
+ */
 export interface StrategyInitOptions {
   sourceUrl?: string;
   audioBuffer?: AudioBuffer;
@@ -27,12 +32,17 @@ export interface StrategyInitOptions {
 }
 
 export interface IPlaybackStrategy {
+  /**
+   * Unique strategy identifier.
+   */
   readonly id: "html5" | "webaudio";
 
   readonly duration: TimeSeconds;
   readonly isReady: boolean;
   readonly isPlaying: boolean;
-
+  /**
+   * Initializes playback resources and media.
+   */
   initialize(options: StrategyInitOptions): Promise<void>;
 
   play(): Promise<void>;
@@ -45,14 +55,23 @@ export interface IPlaybackStrategy {
   setMuted(muted: boolean): void;
   setPlaybackRate(rate: PlaybackRate): void;
   setLoop(loop: boolean): void;
-
+  /**
+   * Returns underlying media element if available.
+   */
   getMediaElement?(): HTMLMediaElement | null;
+  /**
+   * Connects strategy output into an AudioNode graph.
+   */
   connectToGraph(ctx: AudioContext): AudioNode;
-
+  /**
+   * Subscribes to strategy events.
+   */
   on<K extends keyof PlaybackStrategyEvents>(
     event: K,
     callback: (data: PlaybackStrategyEvents[K]) => void,
   ): () => void;
-
+  /**
+   * Releases all resources and listeners.
+   */
   dispose(): void;
 }
