@@ -1,7 +1,5 @@
 import { playerLogger } from "../utils/Logger";
 
-import { playerLogger } from "../utils/Logger";
-
 type Callback<T> = T extends void ? () => void : (payload: T) => void;
 type Unsubscribe = () => void;
 
@@ -104,7 +102,7 @@ export class EventEmitter<
     for (const callback of [...set]) {
       try {
         (callback as (p: TEventMap[K]) => void)(payload);
-} catch (err) {
+      } catch (err) {
         playerLogger.error(`Error in "${String(event)}" handler:`, err);
       }
     }
