@@ -415,6 +415,7 @@ export class HTML5Strategy
     this._audio.removeEventListener("timeupdate", this._onTimeUpdate);
     this._audio.removeEventListener("durationchange", this._onDurationChange);
     this._audio.removeEventListener("error", this._onError);
+    this._sourceNode?.disconnect();
     this._sourceNode = null;
     this._isReady = false;
     this.removeAllListeners();

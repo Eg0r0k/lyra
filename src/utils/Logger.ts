@@ -34,7 +34,7 @@ export class Logger {
     }
 
     private shouldLog(level: LogLevel): boolean {
-        return this.levels[level] <= this.levels[this._logLevel]; 
+        return this.levels[level] >= this.levels[this._logLevel]; 
     }
 
     

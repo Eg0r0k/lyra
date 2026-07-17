@@ -323,6 +323,17 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._audioGraph;
   }
 
+  get graphOrThrow(): AudioGraph {
+    if (!this._audioGraph) {
+      throw new PlayerError(
+        "AudioGraph is not ready. Call load() (and play()) first.",
+        PlayerErrorCode.PLAYBACK_FAILED,
+      );
+    }
+
+    return this._audioGraph;
+  }
+
   get loudnessMetadata(): LoudnessMetadata | null {
     return this._loudnessMetadata;
   }
@@ -432,6 +443,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this.bindStrategyEvents();
 
+      this.setupAudioGraph();
+
       this.recomputeNormalization();
 
       this._stateManager.transition("ready");
@@ -493,7 +506,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     await this.getAudioContext();
 
-    if (!this._audioGraph) {
+    if (!this._graphSourceNode) {
       this.setupAudioGraph();
     }
 
@@ -649,15 +662,21 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    let startFrom: number | undefined = 0;
+
     if (!this.isPlaying) {
       await this._audioGraph.fadeTo(0, 0);
 
       await this.play();
+    } else {
+      // Already playing: continue from the current gain instead of
+      // forcing an audible drop to silence before ramping back up.
+      startFrom = undefined;
     }
 
     const targetVol = this.getRestingGraphGain();
 
-    await this._audioGraph.fadeTo(targetVol, durationSec, 0);
+    await this._audioGraph.fadeTo(targetVol, durationSec, startFrom);
   }
 
   async fadeOut(durationSec: number = 1): Promise<void> {

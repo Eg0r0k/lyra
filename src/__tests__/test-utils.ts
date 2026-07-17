@@ -214,11 +214,24 @@ export class MockAudioElement extends EventTarget {
   public loop = false;
   public error: MockMediaError | null = null;
   public readonly buffered: TimeRanges = createTimeRanges();
+  private readonly attributes = new Map<string, string>();
 
   constructor() {
     super();
     this.duration = audioMockState.defaultDuration;
     audioMockState.instances.push(this);
+  }
+
+  public setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  public removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
+
+  public getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
   }
 
   public load(): void {

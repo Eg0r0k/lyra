@@ -223,6 +223,39 @@ describe("AudioGraph", () => {
     );
   });
 
+  it("routes the second loaded track's own gain node into the shared graph (regression)", async () => {
+    player = new Player({ mode: "webaudio" });
+
+    // Strategy.initialize() creates its own GainNode *before* the shared
+    // AudioGraph's nodes are created, so it is always the first gain node
+    // created during a given load() call.
+    await player.load({ data: createArrayBuffer() });
+    const ctx = getLatestAudioContext();
+    const firstStrategyGain = ctx.createdGains[0] as unknown as {
+      connect: ReturnType<typeof vi.fn>;
+    };
+    await player.play();
+
+    const graph = player.graph;
+    expect(firstStrategyGain.connect).toHaveBeenCalledWith(graph!.input);
+
+    const gainsBeforeSecondLoad = ctx.createdGains.length;
+
+    await player.load({ data: createArrayBuffer() });
+    const secondStrategyGain = ctx.createdGains[gainsBeforeSecondLoad] as unknown as {
+      connect: ReturnType<typeof vi.fn>;
+    };
+    await player.play();
+
+    // Regression guard: previously `play()` only rebuilt the graph routing
+    // when `this._audioGraph` was null, which is only true once per Player
+    // instance. Every subsequent track's strategy output was left
+    // unconnected (silent in webaudio mode, bypassing the graph/EQ/fades
+    // in html5 mode).
+    expect(secondStrategyGain.connect).toHaveBeenCalledWith(graph!.input);
+    expect(player.graph).toBe(graph);
+  });
+
   it("player graph uses the shared audio context after load", async () => {
     player = new Player({ mode: "webaudio" });
 
