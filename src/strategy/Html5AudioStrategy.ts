@@ -141,8 +141,8 @@ export class HTML5Strategy
    * @throws {PlayerError}
    * Thrown when media loading fails.
    *
-   * @throws {Error}
-   * Thrown when media loading times out.
+   * @throws {PlayerError}
+   * Thrown ({@link PlayerErrorCode.LOAD_NETWORK}) when media readiness times out.
    */
 
   async initialize(options: StrategyInitOptions): Promise<void> {
@@ -156,154 +156,86 @@ export class HTML5Strategy
     this._audio.loop = options.loop;
     this._audio.preload = options.preload;
 
-    const preAttachedMedia = options.metadata?.preAttachedMedia === true;
-
-    if (preAttachedMedia) {
-      if (this._audio.readyState >= 1) {
-        this._isReady = true;
-        return;
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          this._audio.removeEventListener("loadedmetadata", onLoadedMetadata);
-          this._audio.removeEventListener("canplay", onCanPlay);
-          this._audio.removeEventListener("error", onError);
-          options.signal.removeEventListener("abort", onAbort);
-          clearTimeout(timer);
-          this._activeInitCleanup = null;
-        };
-
-        const onLoadedMetadata = () => {
-          cleanup();
-          resolve();
-        };
-
-        const onCanPlay = () => {
-          cleanup();
-          resolve();
-        };
-
-        const onError = () => {
-          cleanup();
-          reject(this.createMediaError());
-        };
-
-        const onAbort = () => {
-          cleanup();
-          reject(new DOMException("Aborted", "AbortError"));
-        };
-
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(new Error("Timeout waiting for attached media readiness"));
-        }, 30_000);
-
-        this._activeInitCleanup = cleanup;
-
-        this._audio.addEventListener("loadedmetadata", onLoadedMetadata, {
-          once: true,
-        });
-        this._audio.addEventListener("canplay", onCanPlay, { once: true });
-        this._audio.addEventListener("error", onError, { once: true });
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      });
-
-      this._isReady = true;
-      return;
-    }
-
     if (options.sourceUrl) {
-      if (
-        options.requiresCrossOrigin &&
-        isCrossOrigin(options.sourceUrl)
-      ) {
+      if (options.requiresCrossOrigin && isCrossOrigin(options.sourceUrl)) {
         this._audio.crossOrigin = "anonymous";
       } else {
         this._audio.removeAttribute("crossorigin");
       }
       this._audio.src = options.sourceUrl;
 
-      await new Promise<void>((resolve, reject) => {
-        const onCanPlay = () => {
-          cleanup();
-          resolve();
-        };
-        const onError = () => {
-          cleanup();
-          reject(this.createMediaError());
-        };
-        const onAbort = () => {
-          cleanup();
-          reject(new DOMException("Aborted", "AbortError"));
-        };
-        const cleanup = () => {
-          this._audio.removeEventListener("canplay", onCanPlay);
-          this._audio.removeEventListener("error", onError);
-          options.signal.removeEventListener("abort", onAbort);
-          this._activeInitCleanup = null;
-        };
-
-        this._activeInitCleanup = cleanup;
-
-        this._audio.addEventListener("canplay", onCanPlay, { once: true });
-        this._audio.addEventListener("error", onError, { once: true });
-        options.signal.addEventListener("abort", onAbort, { once: true });
-        this._audio.load();
-      });
+      // Attach the waiter (listeners bound synchronously) before load().
+      const ready = this.waitForReady(options.signal);
+      this._audio.load();
+      await ready;
 
       this._isReady = true;
-    } else {
-      if (this._audio.readyState >= 1) {
-        this._isReady = true;
-        return;
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          this._audio.removeEventListener("loadedmetadata", onMeta);
-          this._audio.removeEventListener("canplay", onCanPlay);
-          this._audio.removeEventListener("error", onError);
-          options.signal.removeEventListener("abort", onAbort);
-          clearTimeout(timer);
-          this._activeInitCleanup = null;
-        };
-
-        const onMeta = () => {
-          cleanup();
-          resolve();
-        };
-
-        const onCanPlay = () => {
-          cleanup();
-          resolve();
-        };
-
-        const onError = () => {
-          cleanup();
-          reject(this.createMediaError());
-        };
-
-        const onAbort = () => {
-          cleanup();
-          reject(new DOMException("Aborted", "AbortError"));
-        };
-
-        const timer = setTimeout(() => {
-          cleanup();
-          reject(new Error("Timeout waiting for loadedmetadata"));
-        }, 30_000);
-
-        this._activeInitCleanup = cleanup;
-
-        this._audio.addEventListener("loadedmetadata", onMeta, { once: true });
-        this._audio.addEventListener("canplay", onCanPlay, { once: true });
-        this._audio.addEventListener("error", onError, { once: true });
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      });
-
-      this._isReady = true;
+      return;
     }
+
+    // Pre-attached / externally-fed media (HLS via MSE): fast-path when metadata
+    // is already available, otherwise wait for readiness.
+    if (this._audio.readyState >= 1) {
+      this._isReady = true;
+      return;
+    }
+
+    await this.waitForReady(options.signal);
+    this._isReady = true;
+  }
+
+  /** Default readiness timeout. Shared by every initialize() path (F-09). */
+  private static readonly READINESS_TIMEOUT_MS = 30_000;
+
+  /**
+   * Resolves on the earliest of `loadedmetadata` / `canplay`, rejects on the
+   * element `error`, on `signal` abort ({@link DOMException} `AbortError`), or on
+   * a {@link HTML5Strategy.READINESS_TIMEOUT_MS} timeout
+   * ({@link PlayerErrorCode.LOAD_NETWORK}). Always removes its listeners + timer.
+   */
+  private waitForReady(signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        this._audio.removeEventListener("loadedmetadata", onReady);
+        this._audio.removeEventListener("canplay", onReady);
+        this._audio.removeEventListener("error", onError);
+        signal.removeEventListener("abort", onAbort);
+        clearTimeout(timer);
+        this._activeInitCleanup = null;
+      };
+
+      const onReady = () => {
+        cleanup();
+        resolve();
+      };
+
+      const onError = () => {
+        cleanup();
+        reject(this.createMediaError());
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          new PlayerError(
+            `Media readiness timed out after ${HTML5Strategy.READINESS_TIMEOUT_MS}ms`,
+            PlayerErrorCode.LOAD_NETWORK,
+          ),
+        );
+      }, HTML5Strategy.READINESS_TIMEOUT_MS);
+
+      this._activeInitCleanup = cleanup;
+
+      this._audio.addEventListener("loadedmetadata", onReady, { once: true });
+      this._audio.addEventListener("canplay", onReady, { once: true });
+      this._audio.addEventListener("error", onError, { once: true });
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   private setupEventListeners(): void {

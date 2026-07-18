@@ -789,4 +789,53 @@ describe("Player", () => {
       expect(player.state).toBe("buffering");
     });
   });
+
+  describe("html5 readiness waiter (T-09)", () => {
+    it("url load times out with LOAD_NETWORK", async () => {
+      vi.useFakeTimers();
+      try {
+        setAudioAutoLoadCanPlay(false); // element never fires canplay/error
+        const player = trackPlayer(new Player({ mode: "html5" }));
+
+        const load = player.load("https://cdn.example.com/stall.mp3");
+        const rejection = expect(load).rejects.toMatchObject({
+          code: PlayerErrorCode.LOAD_NETWORK,
+        });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        await rejection;
+
+        expect(player.state).toBe("error");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("readiness timeout cleans up listeners and the timer", async () => {
+      vi.useFakeTimers();
+      try {
+        setAudioAutoLoadCanPlay(false);
+        const player = trackPlayer(new Player({ mode: "html5" }));
+
+        const load = player.load("https://cdn.example.com/stall.mp3");
+        const rejection = expect(load).rejects.toMatchObject({
+          code: PlayerErrorCode.LOAD_NETWORK,
+        });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        await rejection;
+
+        // Timer fired and was cleared — no leftover readiness timer.
+        expect(vi.getTimerCount()).toBe(0);
+
+        // Late readiness/error events are inert: the waiter's listeners are gone.
+        const element = getLatestAudioElement();
+        element.dispatchEvent(new Event("canplay"));
+        element.dispatchEvent(new Event("error"));
+        expect(player.state).toBe("error");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
