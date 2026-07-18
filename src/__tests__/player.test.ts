@@ -616,4 +616,76 @@ describe("Player", () => {
       expect(player.state).toBe("ready");
     });
   });
+
+  describe("web audio routing policy + CORS (T-04)", () => {
+    it("webAudioRouting:'never' html5 load creates no AudioContext and graph is null", async () => {
+      const player = trackPlayer(
+        new Player({ mode: "html5", webAudioRouting: "never" }),
+      );
+
+      await player.load("https://cdn.example.com/song.mp3");
+
+      expect(player.state).toBe("ready");
+      expect(MockAudioContext.instances).toHaveLength(0);
+      expect(player.graph).toBeNull();
+
+      await player.play();
+      expect(player.isPlaying).toBe(true);
+      expect(MockAudioContext.instances).toHaveLength(0);
+    });
+
+    it("does not set crossOrigin for a same-origin URL (default routing)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+
+      await player.load(`${window.location.origin}/song.mp3`);
+
+      expect(getLatestAudioElement().crossOrigin).toBeNull();
+    });
+
+    it("sets crossOrigin=anonymous for a cross-origin URL when routing (out of the box)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+
+      await player.load("https://cdn.example.com/song.mp3");
+
+      expect(getLatestAudioElement().crossOrigin).toBe("anonymous");
+      expect(player.graph).not.toBeNull();
+    });
+
+    it("corsFallback retries a cross-origin media error without crossOrigin and disables the graph", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      setNextAudioLoadError(
+        new MockMediaError(MockMediaError.MEDIA_ERR_SRC_NOT_SUPPORTED, "cors"),
+      );
+
+      const player = trackPlayer(
+        new Player({ mode: "html5", corsFallback: true }),
+      );
+
+      await player.load("https://cdn.example.com/song.mp3");
+
+      expect(player.state).toBe("ready");
+      expect(getLatestAudioElement().crossOrigin).toBeNull();
+      expect(player.graph).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.stringContaining("crossOrigin"),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("without corsFallback a cross-origin media error surfaces with no retry", async () => {
+      setNextAudioLoadError(
+        new MockMediaError(MockMediaError.MEDIA_ERR_NETWORK, "net"),
+      );
+
+      const player = trackPlayer(new Player({ mode: "html5" }));
+
+      await expect(
+        player.load("https://cdn.example.com/song.mp3"),
+      ).rejects.toMatchObject({ code: PlayerErrorCode.LOAD_NETWORK });
+      expect(player.state).toBe("error");
+    });
+  });
 });

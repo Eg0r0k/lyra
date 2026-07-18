@@ -24,6 +24,7 @@ import {
   LoudnessNormalizationOptions,
 } from "../audio/normalization";
 import { playerLogger } from "../utils/Logger";
+import { isCrossOrigin } from "../utils/url";
 
 function inferLoadErrorCode(error: unknown): PlayerErrorCode {
   if (error instanceof PlayerError) {
@@ -73,6 +74,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private _sourceManager: SourceManager;
   private _audioGraph: AudioGraph | null = null;
   private _graphSourceNode: AudioNode | null = null;
+  /** Whether the current load routes the strategy through the Web Audio graph. */
+  private _routeGraphForLoad = true;
 
   private _currentStrategy: IPlaybackStrategy | null = null;
   private _currentHandler: ISourceHandler | null = null;
@@ -400,9 +403,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this._currentStrategy = this.createStrategy(strategyType);
 
-      const needsContext = strategyType === "webaudio";
+      // Web Audio (buffer) sources always route. HTML5 routes only when
+      // webAudioRouting is 'always'; a CORS fallback may drop it to false below.
+      let routeGraph =
+        strategyType === "webaudio" ||
+        this._options.webAudioRouting === "always";
 
-      const ctx = needsContext ? this.audioContext : null;
+      const prepareCtx = strategyType === "webaudio" ? this.audioContext : null;
 
       playerLogger.debug(
         "Preparing source",
@@ -413,7 +420,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       const prepared = await handler.prepare(
         normalized,
         this._currentStrategy,
-        ctx,
+        prepareCtx,
         signal,
       );
 
@@ -425,22 +432,63 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this._sourceManager.setActiveHandler(handler);
 
-      await this._currentStrategy.initialize({
-        sourceUrl: prepared.sourceUrl,
-        audioBuffer: prepared.audioBuffer,
-        audioContext: this.audioContext,
-        volume: this._volume,
-        muted: this._muted,
-        playbackRate: this._playbackRate,
-        loop: this._loop,
-        preload: this._options.preload,
-        metadata: prepared.metadata,
-        requiresCrossOrigin:
-          this._options.mode === "webaudio" || this._options.mode === "auto",
-        signal,
-      });
+      // Only resolve an AudioContext when this load actually routes — an
+      // un-routed html5 load ('never' or CORS fallback) must not create one.
+      const initStrategy = async (): Promise<void> => {
+        await this._currentStrategy!.initialize({
+          sourceUrl: prepared.sourceUrl,
+          audioBuffer: prepared.audioBuffer,
+          audioContext: routeGraph ? this.audioContext : undefined,
+          volume: this._volume,
+          muted: this._muted,
+          playbackRate: this._playbackRate,
+          loop: this._loop,
+          preload: this._options.preload,
+          metadata: prepared.metadata,
+          requiresCrossOrigin: strategyType === "html5" && routeGraph,
+          signal,
+        });
+      };
+
+      const crossOriginWasSet =
+        strategyType === "html5" &&
+        routeGraph &&
+        !!prepared.sourceUrl &&
+        isCrossOrigin(prepared.sourceUrl);
+
+      try {
+        await initStrategy();
+      } catch (err) {
+        const abortish =
+          err instanceof CancellationError ||
+          (err instanceof DOMException && err.name === "AbortError");
+
+        if (
+          !this._options.corsFallback ||
+          !crossOriginWasSet ||
+          abortish ||
+          !isCurrentLoad()
+        ) {
+          throw err;
+        }
+
+        signal.throwIfAborted();
+
+        playerLogger.warn(
+          "CORS media error — retrying without crossOrigin; " +
+            "EQ/fades/analyser/normalization are disabled for this track.",
+        );
+
+        this._currentStrategy.dispose();
+        routeGraph = false;
+        this._currentStrategy = this.createStrategy(strategyType);
+
+        await initStrategy();
+      }
 
       signal.throwIfAborted();
+
+      this._routeGraphForLoad = routeGraph;
 
       this.bindStrategyEvents();
 
@@ -527,15 +575,21 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._currentStrategy === strategy &&
       this._cancellation?.signal === signal;
 
-    await this.getAudioContext();
+    // Un-routed html5 playback needs no AudioContext — the element plays on its
+    // own. Only resolve/resume a context when this load routes through the graph.
+    if (this._routeGraphForLoad) {
+      await this.getAudioContext();
 
-    if (!isCurrent()) {
-      playerLogger.debug("play() superseded during getAudioContext; ignoring");
-      return;
-    }
+      if (!isCurrent()) {
+        playerLogger.debug(
+          "play() superseded during getAudioContext; ignoring",
+        );
+        return;
+      }
 
-    if (!this._graphSourceNode) {
-      this.setupAudioGraph();
+      if (!this._graphSourceNode) {
+        this.setupAudioGraph();
+      }
     }
 
     try {
@@ -915,6 +969,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    if (!this._routeGraphForLoad) {
+      // Routing disabled for this load ('never' or CORS fallback): no graph,
+      // no AudioContext. Tear down any graph left from a prior routed load so
+      // player.graph === null for this track. Must return BEFORE touching the
+      // audioContext getter so no context is created.
+      this.teardownGraph();
+      return;
+    }
+
     if (this._graphSourceNode) {
       return;
     }
@@ -944,6 +1007,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this._currentStrategy.setMuted(false);
     }
+  }
+
+  private teardownGraph(): void {
+    this._graphSourceNode?.disconnect();
+    this._graphSourceNode = null;
+
+    this._audioGraph?.dispose();
+    this._audioGraph = null;
   }
 
   private getRestingGraphGain(): number {

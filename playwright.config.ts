@@ -42,6 +42,7 @@ export default defineConfig({
         "**/load-play.spec.ts",
         "**/webaudio.spec.ts",
         "**/hls.spec.ts",
+        "**/routing.spec.ts",
       ],
     },
     {
@@ -55,21 +56,27 @@ export default defineConfig({
           },
         },
       },
-      testMatch: ["**/load-play.spec.ts", "**/webaudio.spec.ts"],
+      testMatch: [
+        "**/load-play.spec.ts",
+        "**/webaudio.spec.ts",
+        "**/routing.spec.ts",
+      ],
     },
     {
       // WebKit on Windows is the flaky engine for this repo's author machine —
       // allow retries rather than skipping so real regressions still surface.
       //
-      // NOTE: the Playwright WebKit build on Windows ships NO Web Audio API
-      // (window.AudioContext === undefined) and NO native HLS. Since the library
-      // routes all playback through an AudioContext, no playback path can run
-      // here — so WebKit only runs the honest native-HLS negative. Real Safari
-      // playback / native HLS is covered by manual iOS/macOS testing (README).
+      // The Windows Playwright WebKit build has NO Web Audio API
+      // (window.AudioContext === undefined) and NO native HLS, so graph-routed
+      // playback and hls.js/native HLS can't run here. It DOES run:
+      //  - native-hls.spec: the honest LOAD_NOT_SUPPORTED negative, and
+      //  - routing.spec: plain html5 playback via webAudioRouting:'never' (no
+      //    AudioContext) — the real proof T-04's 'never' path works on WebKit.
+      // Real Safari/iOS graph + native HLS playback stays a manual check (README).
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
       retries: 2,
-      testMatch: ["**/native-hls.spec.ts"],
+      testMatch: ["**/native-hls.spec.ts", "**/routing.spec.ts"],
     },
     {
       // Strict autoplay policy for the gesture-unlock flow: play() must reject

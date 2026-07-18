@@ -7,6 +7,7 @@ import {
 } from "./IPlaybackStrategy";
 import { PlayerError, PlayerErrorCode } from "../types/events";
 import { playerLogger } from "../utils/Logger";
+import { isCrossOrigin } from "../utils/url";
 
 /**
  * HTML5-based playback strategy built on top of the native
@@ -215,7 +216,7 @@ export class HTML5Strategy
     if (options.sourceUrl) {
       if (
         options.requiresCrossOrigin &&
-        this.isCrossOrigin(options.sourceUrl)
+        isCrossOrigin(options.sourceUrl)
       ) {
         this._audio.crossOrigin = "anonymous";
       } else {
@@ -302,14 +303,6 @@ export class HTML5Strategy
       });
 
       this._isReady = true;
-    }
-  }
-
-  private isCrossOrigin(url: string): boolean {
-    try {
-      return new URL(url).origin !== window.location.origin;
-    } catch {
-      return false;
     }
   }
 

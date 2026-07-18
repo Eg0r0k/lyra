@@ -92,6 +92,24 @@ export interface PlayerOptions {
   playbackRate?: number;
   autoplay?: boolean;
   preload?: "none" | "metadata" | "auto";
+  /**
+   * Whether the HTML5 element is routed through the Web Audio graph
+   * (EQ / analyser / fades / normalization).
+   * - `'always'` (default): route and, for cross-origin URLs, set
+   *   `crossOrigin="anonymous"` — graph features work out of the box, but
+   *   cross-origin media then requires CORS headers.
+   * - `'never'`: plain element playback; no graph, no `crossOrigin`, and no
+   *   `AudioContext` is created for html5 loads. `player.graph` is `null`.
+   *
+   * Web Audio (buffer) sources always route regardless of this option.
+   */
+  webAudioRouting?: "always" | "never";
+  /**
+   * When `true`, if a routed (crossOrigin) html5 load fails with a media error,
+   * retry it once WITHOUT `crossOrigin` and without graph routing (graph
+   * disabled for that track). Default `false` — the media error surfaces as-is.
+   */
+  corsFallback?: boolean;
   hlsConfig?: Partial<HLSConfig>;
   loudnessNormalization?: LoudnessNormalizationOptions;
   Hls?: HlsConstructor;
@@ -114,6 +132,8 @@ export const DEFAULT_OPTIONS: ResolvedPlayerOptions = {
   playbackRate: 1,
   autoplay: false,
   preload: "auto",
+  webAudioRouting: "always",
+  corsFallback: false,
   hlsConfig: {
     maxBufferLength: 30,
     maxMaxBufferLength: 60,

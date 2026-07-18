@@ -21,7 +21,12 @@ export type PlaybackStrategyEvents = {
 export interface StrategyInitOptions {
   sourceUrl?: string;
   audioBuffer?: AudioBuffer;
-  audioContext: AudioContext;
+  /**
+   * AudioContext for graph routing. Optional: the html5 strategy ignores it,
+   * and it is omitted for un-routed html5 loads (webAudioRouting:'never') so no
+   * context is created. WebAudioStrategy requires it and throws if absent.
+   */
+  audioContext?: AudioContext;
   volume: Volume;
   muted: boolean;
   playbackRate: PlaybackRate;

@@ -41,10 +41,14 @@ from checked-in fixtures.
 
 Consequences, verified by probing the actual builds (not assumed):
 
-- **WebKit-on-Windows has no Web Audio API and no native HLS.** Because the
-  library routes all playback through an `AudioContext`, no playback path can run
-  under this WebKit build. WebKit therefore only runs the honest native-HLS
-  negative (`native-hls.spec.ts`). Real Safari/iOS playback is a manual check.
+- **WebKit-on-Windows has no Web Audio API and no native HLS.** Graph-routed
+  playback (`webAudioRouting:'always'`, the default) and hls.js/native HLS
+  cannot run under this build. WebKit therefore runs:
+  - `native-hls.spec.ts` — the honest `LOAD_NOT_SUPPORTED` negative, and
+  - `routing.spec.ts` — **plain html5 playback via `webAudioRouting:'never'`**
+    (no `AudioContext`), which works here and proves the T-04 'never' path.
+
+  Real Safari/iOS graph + native-HLS playback stays a manual check.
 - **Autoplay blocking is not enforced** by Playwright's engines here. Verified
   against an *audible* 440 Hz tone (autoplay policies allow inaudible/silent
   media, so silence is not a valid probe): a raw `<audio>.play()` still resolves
