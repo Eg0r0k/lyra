@@ -7,7 +7,7 @@
 | Task | Title | Status | Commit | Date | Notes |
 |------|-------|--------|--------|------|-------|
 | T-01 | Stale-load error gating + AbortSignal into strategies | DONE | b9d3f8b | 2026-07-18 | Catch gated by signal identity (swallow stale); `StrategyInitOptions.signal` required + threaded into both strategies; html5 waiters abort-aware; dispose detaches init waiters. +4 tests, mock empty-src error + deferred decode. |
-| T-02 | Load-generation guard; autoplay decoupled from load() | DONE | (see follow-up) | 2026-07-18 | breaking → major (load() no longer rejects on autoplay block). play() captures strategy+signal, bails silently when superseded; autoplay branch swallows play() error (single PLAYBACK_NOT_ALLOWED emit, state stays ready). +3 tests, mock deferred-play hook. README note deferred to T-25. |
+| T-02 | Load-generation guard; autoplay decoupled from load() | DONE | ecf0a2b | 2026-07-18 | breaking → major (load() no longer rejects on autoplay block). play() captures strategy+signal, bails silently when superseded; autoplay branch swallows play() error (single PLAYBACK_NOT_ALLOWED emit, state stays ready). +3 tests, mock deferred-play hook. README note deferred to T-25. |
 | T-06 | Playwright matrix + local HLS fixtures | TODO | | | moved before T-03/T-04 |
 | T-03 | Native HLS path for Safari/iOS | TODO | | | |
 | T-04 | Web Audio routing policy + CORS rework | TODO | | | amended: no auto-retry |
