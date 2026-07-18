@@ -53,7 +53,7 @@ Recommended workflow: fix the P0 correctness block (T-01…T-05) first, stand up
 | F-31 | Player / StateManager | transition() return value ignored everywhere → silent divergence between intended and actual state | medium | supported by code | T-22 |
 | F-32 | strategies | Rate contract diverges: html5 preserves pitch (default preservesPitch), webaudio resamples (pitch shifts). Undocumented, no capability flag, no time-stretch path | medium | supported by code | T-23, T-24 |
 | F-33 | HLSHandler constructor | Raw console.debug bypasses playerLogger | low | supported by code | T-22 |
-| F-34 | Player.bindStrategyEvents (`waiting` handler) / StateManager | `waiting` → `transition("buffering")` is unguarded, but the FSM allows `buffering` only from `playing`. A `waiting` event in `ready`/`loading`/`paused` (e.g. the media element buffering at play-start before the `playing` transition, or a stall around load) emits an "Invalid state transition: X -> buffering" warning. `buffering → playing` itself is valid; the `playing` handler is already guarded by `is("buffering")`. | low | **author runtime observation (not static analysis)** — surfaced in T-06 browser runs, confirmed against the FSM table | T-08 |
+| F-34 | StateManager `VALID_TRANSITIONS` / Player.bindStrategyEvents (`waiting` handler) | The FSM lists `buffering` as reachable only from `playing`, but buffering physically occurs at the **initial stall** too: `play()` transitions to `playing` only after `await strategy.play()` resolves, so a `waiting` event that arrives first lands while state is still `ready` (or `paused` on resume). The `waiting` handler's `transition("buffering")` then warns ("Invalid state transition: `ready`/`paused` -> `buffering`") **and** the state never reflects buffering — a UI bound to `player.state === "buffering"` shows nothing on a frozen player at startup. Root cause is the table being too restrictive, not the emitter. Fix direction: allow `ready→buffering` and `paused→buffering` (return paths from `buffering` already exist: `playing`/`paused`/`ready`/`error`/`idle`/`disposed`); keep the emitter unguarded so the state reflects the stall. Only `HTML5Strategy` emits `waiting` (decoded WebAudio buffers never stall). `loading→buffering` is not needed — `bindStrategyEvents → … → transition("ready")` is synchronous, so no `waiting` is delivered while state is `loading`. | low | **author runtime observation (not static analysis)** — surfaced in T-06 browser runs, confirmed against the FSM table and the play() ordering | T-08 |
 
 ## Part C. Justifications
 
@@ -326,26 +326,27 @@ Priority: P2 · Type: fix · Breaking: no · Score: S · Depends on: no · Close
 
 Priority: P1 · Type: fix · Breaking: no · Score: S · Depends on: no · Closes findings: F-10, F-34
 
-**Problem.** Player.pause() guards is("playing"); in buffering it silently no-ops although buffering→paused is a valid FSM transition. togglePlay() is consequently broken while buffering. Separately (F-34, author runtime observation): the `waiting` strategy-event handler calls `transition("buffering")` unconditionally, but the FSM allows `buffering` only from `playing` — a `waiting` event in `ready`/`loading`/`paused` (media element buffering at play-start before the `playing` transition, or a stall around load) emits an "Invalid state transition: X -> buffering" warning.
+**Problem.** Player.pause() guards is("playing"); in buffering it silently no-ops although buffering→paused is a valid FSM transition. togglePlay() is consequently broken while buffering. Separately (F-34, author runtime observation): the FSM lists `buffering` as reachable only from `playing`, but buffering physically occurs at the initial stall — `play()` reaches `playing` only after `await strategy.play()`, so a `waiting` event that arrives first lands in `ready` (or `paused` on resume). The unguarded `transition("buffering")` then warns AND, worse, the state never reflects buffering, so a `player.state`-bound spinner shows nothing on a frozen player at startup.
 
 **Action steps.**
 1. Change pause() guard to _stateManager.isActive (playing|buffering).
 2. togglePlay(): base decision on _stateManager.isActive instead of isPlaying (strategy truth diverges while stalled).
 3. Audit stop() for the same class (it has no guard — confirm buffering→ready valid; it is).
-4. (F-34) Guard the `waiting` handler in bindStrategyEvents so it only `transition("buffering")` when `_stateManager.is("playing")` — buffering is reachable solely from `playing` per the FSM, so gate the emitter rather than widening the table. A `waiting` fired outside `playing` still emits the public `waiting` event but performs no state transition.
+4. (F-34) Expand `VALID_TRANSITIONS`: add `buffering` to the `ready` and `paused` target lists so the initial-stall and resume-stall cases are legal. Keep the `waiting` handler emitting `transition("buffering")` unconditionally — do NOT guard it, or the buffering state is lost at startup (the whole point). Return paths from `buffering` already exist (`playing`/`paused`/`ready`/`error`/`idle`/`disposed`), so no stuck state. `loading→buffering` is intentionally NOT added: the bind→ready sequence is synchronous, so no `waiting` is delivered while `loading`.
 
-**Contract.** FSM table unchanged; `buffering` is entered only from `playing`. pause() from buffering → state paused, pause event. `waiting` outside `playing` → no state transition, no warning.
+**Contract.** FSM gains `ready→buffering` and `paused→buffering`; `buffering` is now reachable from `{playing, ready, paused}`. `player.state` reflects buffering at the initial stall and on resume. pause() from buffering → state paused, pause event. The `waiting`/`buffered` public events are unchanged.
 
-**Don't do.** Don't touch strategy internals or the strategy's own `waiting`/`playing` event emission; don't change the `playing` handler's `is("buffering")` guard; don't add `buffering` as a target from non-playing states in the FSM table (guard the handler instead).
+**Don't do.** Don't guard/suppress the `waiting` emitter (that drops the startup buffering state — the bug); don't touch strategy internals or the strategy's own `waiting`/`playing` emission; don't change the `playing` handler's `is("buffering")` guard; don't add `loading→buffering` (not reachable) or any `buffering→` exits beyond those already present.
 
 **Acceptance criteria.**
 - [ ] waiting → pause() → state paused, no FSM warning.
 - [ ] togglePlay() during buffering pauses.
-- [ ] (F-34) `waiting` fired while in `ready`/`paused` → no "Invalid state transition" warning and no bogus `buffering` transition; the public `waiting` event still fires.
+- [ ] (F-34) play() on a stalling source: `waiting` before `playing` → `player.state === "buffering"` (not `ready`), no "Invalid state transition" warning; when data arrives → `playing`.
+- [ ] (F-34) resume from `paused` with a stall → `buffering` then `playing`, no warning.
 
-**Tests.** "pause during buffering transitions to paused" — catches F-10. "togglePlay during buffering pauses instead of double-playing" — catches the isPlaying divergence. "waiting outside playing does not warn or transition to buffering" — catches F-34.
+**Tests.** "pause during buffering transitions to paused" — catches F-10. "togglePlay during buffering pauses instead of double-playing" — catches the isPlaying divergence. "waiting after play() from ready enters buffering without warning" — catches F-34 (state + no-warn). "waiting after resume from paused enters buffering" — catches the resume path. Extend test-utils so the mock element can emit `waiting` before `playing` on play() (deferred/stall hook).
 
-**Risk.** HTML5 element may emit playing after pause if the stall resolves mid-call — verify the playing handler's is("buffering") guard prevents a bogus transition (it does; keep a regression test).
+**Risk.** A genuinely stuck stream stays in `buffering` (correct) with exits via pause/stop/error/load. HTML5 element may emit playing after pause if the stall resolves mid-call — verify the playing handler's is("buffering") guard prevents a bogus transition (it does; keep a regression test). No existing test encodes `ready↛buffering` (the invalid-transition unit test uses `idle→playing`), so the table change is safe.
 
 ---
 

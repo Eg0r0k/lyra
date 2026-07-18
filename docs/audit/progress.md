@@ -13,7 +13,7 @@
 | T-04 | Web Audio routing policy + CORS rework | TODO | | | amended: no auto-retry. After implementing, revert to e2e and enable WebKit playback via `webAudioRouting: 'never'` (plain html5, no AudioContext) — best e2e proof the option works, since WebKit-Win has no Web Audio. Cross-origin CORS routes ready in e2e/server.mjs (`:4174` /cors + /nocors). |
 | T-05 | HLS runtime errors + recovery | TODO | | | |
 | T-07 | ESLint flat config | TODO | | | |
-| T-08 | pause/togglePlay during buffering | TODO | | | also closes F-34 (author runtime obs): guard `waiting` handler so `buffering` is entered only from `playing` (folded into T-08 spec). |
+| T-08 | pause/togglePlay during buffering | TODO | | | also closes F-34 (author runtime obs): EXPAND FSM table with `ready→buffering` + `paused→buffering` (buffering happens at initial stall / resume), keep `waiting` emitter unguarded so state reflects it. Direction corrected from emitter-guard after review. Folded into T-08 spec. |
 | T-09 | Unified HTML5 readiness waiter | TODO | | | |
 | T-10 | Volume/fade gain split | TODO | | | breaking → major |
 | T-11 | Harden unlockAudio + auto-resume | TODO | | | |
