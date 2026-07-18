@@ -1,0 +1,78 @@
+import { test, expect } from "@playwright/test";
+import { gotoHarness } from "./helpers";
+
+// Chromium only (MSE + hls.js). WebKit-on-Windows has no MSE HLS and no native
+// HLS; that path is covered by native-hls.spec.ts (honest negative) and a
+// jsdom unit test (T-03).
+
+test("plays an HLS VOD stream via hls.js", async ({ page }) => {
+  await gotoHarness(page);
+
+  const result = await page.evaluate(async () => {
+    const player = new window.Lyra.Player({ Hls: window.Hls });
+
+    let errored: unknown = null;
+    player.on("error", (e) => {
+      errored = e;
+    });
+
+    await player.load({ url: "/fixtures/hls/vod.m3u8", type: "hls" });
+    const mode = player.mode;
+
+    await player.play();
+
+    const delay = Promise.withResolvers<void>();
+    setTimeout(() => delay.resolve(), 600);
+    await delay.promise;
+
+    const advanced = Number(player.currentTime) > 0;
+
+    await player.dispose();
+    return { errored, mode, advanced };
+  });
+
+  expect(result.errored).toBeNull();
+  expect(result.mode).toBe("html5");
+  expect(result.advanced).toBe(true);
+});
+
+// Fixture guard for T-15: hls.js must actually classify the live playlist as
+// live (no #EXT-X-ENDLIST), and the VOD playlist as not-live. If this breaks,
+// T-15 would be testing the wrong fixture.
+test("hls.js reports live vs VOD correctly on the fixtures", async ({ page }) => {
+  await gotoHarness(page);
+
+  const readLiveFlag = (url: string) =>
+    page.evaluate((url) => {
+      const Hls = window.Hls;
+      const hls = new Hls();
+      const audio = document.createElement("audio");
+      const { promise, resolve, reject } = Promise.withResolvers<boolean>();
+
+      const timer = setTimeout(() => {
+        hls.destroy();
+        reject(new Error(`timeout waiting for LEVEL_LOADED on ${url}`));
+      }, 8000);
+
+      hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+        clearTimeout(timer);
+        const live = data.details.live;
+        hls.destroy();
+        resolve(live);
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          clearTimeout(timer);
+          hls.destroy();
+          reject(new Error(`${data.type}:${data.details}`));
+        }
+      });
+
+      hls.loadSource(url);
+      hls.attachMedia(audio);
+      return promise;
+    }, url);
+
+  expect(await readLiveFlag("/fixtures/hls/live.m3u8")).toBe(true);
+  expect(await readLiveFlag("/fixtures/hls/vod.m3u8")).toBe(false);
+});

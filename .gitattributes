@@ -3,3 +3,11 @@
 *.json text eol=lf
 *.yaml text eol=lf
 *.md text eol=lf
+
+# e2e assets
+*.mjs text eol=lf
+*.html text eol=lf
+*.m3u8 text eol=lf
+*.wav binary
+*.m4s binary
+*.mp4 binary

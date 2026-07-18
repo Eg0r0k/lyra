@@ -25,6 +25,7 @@
     "lint": "eslint . --ext .ts,.tsx",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "pnpm build && playwright test",
     "typecheck": "tsc --noEmit",
     "release:patch": "pnpm typecheck && pnpm build && npm version patch && pnpm publish",
     "release:minor": "pnpm typecheck && pnpm build && npm version minor && pnpm publish",
@@ -56,10 +57,12 @@
     "url": "https://github.com/Eg0r0k/lyra/issues"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^25.5.0",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
     "eslint": "^10.1.0",
+    "hls.js": "^1.6.16",
     "jsdom": "^29.0.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",

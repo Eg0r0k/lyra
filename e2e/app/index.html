@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lyra-audio e2e harness</title>
+  </head>
+  <body>
+    <!-- Clicking this provides real user activation for gesture/unlock tests. -->
+    <button id="gesture" type="button">gesture</button>
+    <script type="module">
+      import * as Lyra from "/dist/index.js";
+      import Hls from "/vendor/hls.mjs";
+
+      // Exposed for Playwright page.evaluate(). Tests build/drive Player here and
+      // return only serializable primitives.
+      window.Lyra = Lyra;
+      window.Hls = Hls;
+      window.__ready = true;
+    </script>
+  </body>
+</html>
