@@ -8,7 +8,7 @@
 
 | Q | Decision |
 |---|----------|
-| Q1 | `webAudioRouting` defaults to `'always'` — EQ/visualizer must work out of the box. BUT `crossOrigin` is set **only when graph features are actually needed** for the load (see T-04 amendment below), not blanket for the mode. |
+| Q1 | **IMPLEMENTED (Option 1, supersedes the original text below).** `webAudioRouting` is an explicit `'always' \| 'never'` option (default `'always'`), overridable per `load()` via `LoadOptions`. In `'always'`, the html5 element is routed through the graph and `crossOrigin="anonymous"` is set for **every cross-origin URL** (blanket per mode) so EQ/visualizer/fades work out of the box, including features requested after `load()`; cross-origin media then requires CORS headers. In `'never'`, nothing is routed, no `crossOrigin`, no `AudioContext`. There is **no usage heuristic** — crossOrigin is decided purely from the (resolved per-load) option × strategy × cross-origin URL. Rationale: graph features are requested *after* `load()`, the crossOrigin decision is irreversible before `src`, and lazy re-attach is forbidden — so a "needed?" guess is blind to the dominant case and order-dependent. Opt out of crossOrigin on a given track with `webAudioRouting:'never'` (per-load). |
 | Q2 | Loudness metadata is **cleared on every `load()`**; `retainMetadataAcrossLoads` opt-out flag as spec'd in T-12. Sticky behavior was a bug. |
 | Q3 | Browser floor: **Safari 15+**, evergreen Chrome/Firefox. Keep the `webkitPreservesPitch` / `mozPreservesPitch` vendor fallbacks anyway — they cost three lines of feature detection. |
 | Q4 | **Live HLS is supported.** T-15 in full scope. `forStreaming` already promises it; hardcoded `isLive: false` was an omission, not a decision. |
@@ -17,32 +17,51 @@
 
 ## Task Amendments
 
-### T-04 — CORS logic reworked (auto-retry CANCELLED)
+### T-04 — CORS logic reworked (auto-retry CANCELLED) — AS BUILT (05a6f0c)
 
 The original step 4 ("catch media error, retry once without crossOrigin") is
 **cancelled**. Rationale: `MediaError` cannot distinguish a CORS rejection from
 a 404 or a broken URL — both surface as the same media error — so a blind
 retry would double the time-to-failure of every honest load error.
 
-Replacement:
+**Implemented contract (Option 1, approved in-session — this replaces the
+original step 1 and Q1, which assumed a "graph feature needed?" heuristic that
+is unimplementable given post-`load()` feature requests + irreversible
+crossOrigin + no lazy attach):**
 
-1. `crossOrigin="anonymous"` is set **only when the audio graph is actually
-   needed for this load**: `webAudioRouting === 'always'` **and** graph
-   features are in use (EQ / analyser-visualizer / fades / normalization —
-   determined by options or prior API usage), or the strategy is `webaudio`.
-   If no graph feature is used → element loads without `crossOrigin`, graph is
-   not built, `player.graph === null` for that load.
-2. **No automatic retry-fallback.** Instead add
-   `PlayerOptions.corsFallback?: boolean` (default `false`). When `true`:
-   exactly one retry without `crossOrigin` and without graph routing, one
-   `playerLogger.warn` naming the consequence (EQ/fades/analyser disabled for
-   this track). Retry must respect the load signal (T-01). When `false`
-   (default): the media error surfaces as-is, no retry.
-3. All other T-04 steps (the `webAudioRouting` option itself, no-AudioContext
-   on `'never'`, `graph === null` handling in volume paths) stand unchanged.
+1. `webAudioRouting?: 'always' | 'never'` on `PlayerOptions` (default
+   `'always'`), **overridable per load** via `load(source, { webAudioRouting })`
+   (`LoadOptions`). Web Audio (buffer) sources always route regardless.
+   - `'always'`: html5 is routed through the graph; `crossOrigin="anonymous"`
+     is set for **every cross-origin URL** (no usage heuristic). Same-origin
+     URLs never get `crossOrigin`. Graph features work out of the box whenever
+     requested. Cross-origin media requires CORS headers.
+   - `'never'`: no graph, no `crossOrigin`, and **no `AudioContext` is created**
+     for html5 (guarded in `setupAudioGraph`, `play`, and `initialize`);
+     `player.graph === null`. Requesting a graph feature afterwards is a no-op
+     (`player.graph?.setEQBand` / `?.analyzer` → undefined; fades early-return;
+     `graphOrThrow` throws) — **no crash, no element/source recreation**.
+2. **No automatic retry-fallback.** `PlayerOptions.corsFallback?: boolean`
+   (default `false`), also per-load overridable. When `true`: exactly one retry
+   without `crossOrigin` and without graph routing, one `playerLogger.warn`;
+   respects the load signal (T-01). When `false` (default): the media error
+   surfaces as-is.
+3. `crossOrigin` decision = `strategy === 'html5' && routeGraph`, where
+   `routeGraph = strategy === 'webaudio' || resolvedWebAudioRouting === 'always'`;
+   the html5 strategy then sets the attribute only if the URL is cross-origin
+   (shared `isCrossOrigin`, `src/utils/url.ts`).
 
-Additional acceptance criterion: *"no graph features requested → element has
-no crossOrigin attribute"*.
+**Dropped from the original amendment:** step 1's "crossOrigin only when graph
+features are in use (options or prior API usage)" and the acceptance criterion
+*"no graph features requested → no crossOrigin attribute"*. Instead, crossOrigin
+absence is covered by tests for same-origin URLs and for `webAudioRouting:'never'`.
+
+**Tests (as built):** never-routing (no AudioContext, graph null, no crossOrigin);
+same-origin (no crossOrigin); cross-origin 'always' (crossOrigin set, graph);
+corsFallback opt-in retry (no crossOrigin, graph disabled) vs. no-fallback
+surfacing; per-load overrides both directions; mixed-playlist per-track
+resolution (F-02). e2e `routing.spec.ts` proves `'never'` plays on WebKit
+(no Web Audio there).
 
 ### T-06 — moved earlier
 

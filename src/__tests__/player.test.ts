@@ -628,6 +628,7 @@ describe("Player", () => {
       expect(player.state).toBe("ready");
       expect(MockAudioContext.instances).toHaveLength(0);
       expect(player.graph).toBeNull();
+      expect(getLatestAudioElement().crossOrigin).toBeNull();
 
       await player.play();
       expect(player.isPlaying).toBe(true);
@@ -686,6 +687,51 @@ describe("Player", () => {
         player.load("https://cdn.example.com/song.mp3"),
       ).rejects.toMatchObject({ code: PlayerErrorCode.LOAD_NETWORK });
       expect(player.state).toBe("error");
+    });
+
+    it("per-load webAudioRouting:'never' overrides the constructor 'always'", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" })); // default 'always'
+
+      await player.load("https://cdn.example.com/song.mp3", {
+        webAudioRouting: "never",
+      });
+
+      expect(player.state).toBe("ready");
+      expect(player.graph).toBeNull();
+      expect(MockAudioContext.instances).toHaveLength(0);
+      expect(getLatestAudioElement().crossOrigin).toBeNull();
+    });
+
+    it("per-load webAudioRouting:'always' overrides the constructor 'never'", async () => {
+      const player = trackPlayer(
+        new Player({ mode: "html5", webAudioRouting: "never" }),
+      );
+
+      await player.load("https://cdn.example.com/song.mp3", {
+        webAudioRouting: "always",
+      });
+
+      expect(player.state).toBe("ready");
+      expect(player.graph).not.toBeNull();
+      expect(getLatestAudioElement().crossOrigin).toBe("anonymous");
+    });
+
+    it("resolves a mixed playlist per track (F-02): routed then un-routed on one player", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+
+      // Track A: CORS source with the graph.
+      await player.load("https://cdn.example.com/cors.mp3", {
+        webAudioRouting: "always",
+      });
+      expect(player.graph).not.toBeNull();
+      expect(getLatestAudioElement().crossOrigin).toBe("anonymous");
+
+      // Track B: non-CORS source without the graph, same player.
+      await player.load("https://cdn.example.com/no-cors.mp3", {
+        webAudioRouting: "never",
+      });
+      expect(player.graph).toBeNull();
+      expect(getLatestAudioElement().crossOrigin).toBeNull();
     });
   });
 });

@@ -46,6 +46,7 @@ export type {
   QualityLevel,
   HLSConfig,
   PlayerOptions,
+  LoadOptions,
 } from "./types";
 
 export { normalizeSource, DEFAULT_OPTIONS } from "./types";

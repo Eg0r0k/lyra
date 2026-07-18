@@ -123,6 +123,18 @@ export interface PlayerOptions {
   Hls?: HlsConstructor;
 }
 
+/**
+ * Per-load overrides applied on top of the constructor {@link PlayerOptions}.
+ * Lets a mixed playlist resolve routing per track — e.g. CORS-enabled sources
+ * play with the graph, non-CORS sources without it (F-02).
+ */
+export interface LoadOptions {
+  /** Override {@link PlayerOptions.webAudioRouting} for this load only. */
+  webAudioRouting?: "always" | "never";
+  /** Override {@link PlayerOptions.corsFallback} for this load only. */
+  corsFallback?: boolean;
+}
+
 export type ResolvedPlayerOptions = Required<
   Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "hlsConfig">
 > & {

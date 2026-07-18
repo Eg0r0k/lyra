@@ -4,6 +4,7 @@ import { PlayerError, PlayerErrorCode, PlayerEventMap } from "../types/events";
 import { StateManager } from "./StateManager";
 import {
   AudioSourceInput,
+  LoadOptions,
   DEFAULT_OPTIONS,
   HlsConstructor,
   normalizeSource,
@@ -357,8 +358,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._audioGraph?.getNormalizationGainDb() ?? 0;
   }
 
-  async load(source: AudioSourceInput): Promise<void> {
+  async load(source: AudioSourceInput, loadOptions?: LoadOptions): Promise<void> {
     const normalized = normalizeSource(source);
+
+    // Per-load overrides on top of the constructor options (F-02 mixed playlists).
+    const routingPolicy =
+      loadOptions?.webAudioRouting ?? this._options.webAudioRouting;
+    const corsFallback =
+      loadOptions?.corsFallback ?? this._options.corsFallback;
 
     if (this._stateManager.isDisposed) {
       throw new PlayerError(
@@ -406,8 +413,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       // Web Audio (buffer) sources always route. HTML5 routes only when
       // webAudioRouting is 'always'; a CORS fallback may drop it to false below.
       let routeGraph =
-        strategyType === "webaudio" ||
-        this._options.webAudioRouting === "always";
+        strategyType === "webaudio" || routingPolicy === "always";
 
       const prepareCtx = strategyType === "webaudio" ? this.audioContext : null;
 
@@ -464,7 +470,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
           (err instanceof DOMException && err.name === "AbortError");
 
         if (
-          !this._options.corsFallback ||
+          !corsFallback ||
           !crossOriginWasSet ||
           abortish ||
           !isCurrentLoad()
