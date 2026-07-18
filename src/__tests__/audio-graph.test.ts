@@ -5,7 +5,7 @@
  * - `AudioGraph` is also tested directly so EQ and analyser behavior can be
  *   asserted without depending on Player orchestration for every branch.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { AudioGraph } from "../audio/AudioGraph";
 import { Player } from "../index";
@@ -17,6 +17,7 @@ import {
   getLatestAudioElement,
   getLatestAudioContext,
   getLatestGainNode,
+  getFadeGainNode,
 } from "./test-utils";
 
 describe("AudioGraph", () => {
@@ -94,11 +95,9 @@ describe("AudioGraph", () => {
   it("finalizes fade gain so later fades do not start from stale AudioParam value", async () => {
     vi.useFakeTimers();
     const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: {
-        value: number;
-        setValueAtTime: ReturnType<typeof vi.fn>;
-      };
+    // fadeTo drives the fade gain (second-to-last created), not the volume gain.
+    const fadeGain = getFadeGainNode() as unknown as {
+      gain: { value: number; setValueAtTime: Mock };
     };
 
     const fadePromise = graph.fadeTo(0.4, 0.1);
@@ -106,8 +105,10 @@ describe("AudioGraph", () => {
     await vi.advanceTimersByTimeAsync(180);
     await fadePromise;
 
-    expect(outputGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 0);
-    expect(outputGain.gain.value).toBe(0.4);
+    // Bug guarded: the completion timer pins the fade gain to its final value so
+    // a later fade doesn't start from a stale ramping AudioParam value.
+    expect(fadeGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 0);
+    expect(fadeGain.gain.value).toBe(0.4);
 
     vi.useRealTimers();
   });
@@ -123,35 +124,40 @@ describe("AudioGraph", () => {
       await player.fadeIn(0);
     }
 
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: { value: number };
-    };
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
 
-    expect(getLatestAudioElement().volume).toBe(0.5);
-    expect(outputGain.gain.value).toBe(1);
+    // T-10 ownership: routed html5 pins the element to unity; user volume lives on
+    // the graph volume gain, and the fade multiplier returns to 1 after cycles —
+    // no drift (effective 0.5 × 1).
+    expect(getLatestAudioElement().volume).toBe(1);
+    expect(volumeGain.gain.value).toBe(0.5);
+    expect(fadeGain.gain.value).toBe(1);
   });
 
-  it("restores gain to previous value when fade is cancelled mid-flight", async () => {
+  it("restores fade gain and keeps volume independent when a fade is cancelled mid-flight", async () => {
     vi.useFakeTimers();
     const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: {
-        value: number;
-        setValueAtTime: ReturnType<typeof vi.fn>;
-      };
+    const volumeGain = getLatestGainNode() as unknown as {
+      gain: { value: number };
+    };
+    const fadeGain = getFadeGainNode() as unknown as {
+      gain: { value: number; setValueAtTime: Mock };
     };
 
     graph.setVolumeImmediate(0.5);
-    expect(outputGain.gain.value).toBe(0.5);
+    expect(volumeGain.gain.value).toBe(0.5);
 
     graph.fadeTo(0.8, 1);
-
     await vi.advanceTimersByTimeAsync(300);
-
     graph.cancelFade();
 
-    expect(outputGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.5, expect.any(Number));
-    expect(outputGain.gain.value).toBe(0.5);
+    // Cancel-restore bug guarded: cancelFade pins the fade gain to its pre-fade
+    // value (1) instead of leaving a stale ramp. Volume (0.5) is untouched by the
+    // fade/cancel — the F-13 independence fix.
+    expect(fadeGain.gain.setValueAtTime).toHaveBeenLastCalledWith(1, expect.any(Number));
+    expect(fadeGain.gain.value).toBe(1);
+    expect(volumeGain.gain.value).toBe(0.5);
 
     vi.useRealTimers();
   });
@@ -170,34 +176,33 @@ describe("AudioGraph", () => {
       player.cancelFade();
     }
 
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: { value: number };
-    };
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
 
-    expect(outputGain.gain.value).toBe(1);
-    expect(getLatestAudioElement().volume).toBe(0.8);
+    expect(fadeGain.gain.value).toBe(1);
+    expect(volumeGain.gain.value).toBe(0.8);
+    expect(getLatestAudioElement().volume).toBe(1);
 
     vi.useRealTimers();
   });
 
-  it("keeps HTML5 volume on the media element and applies graph gain before play starts", async () => {
+  it("applies HTML5 volume via the graph (element pinned) before play starts", async () => {
     const playSpy = vi.spyOn(MockAudioElement.prototype, "play");
     player = new Player({ mode: "html5", autoplay: true, volume: 0.2 });
 
     await player.load("https://cdn.example.com/song.mp3");
 
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: {
-        setValueAtTime: ReturnType<typeof vi.fn>;
-        setTargetAtTime: ReturnType<typeof vi.fn>;
-      };
+    // T-10 (F-11): routed html5 applies user volume to the graph volume gain, not
+    // the element (which iOS ignores). The element is pinned to unity.
+    const volumeGain = getLatestGainNode() as unknown as {
+      gain: { setValueAtTime: Mock; setTargetAtTime: Mock };
     };
 
-    expect(outputGain.gain.setValueAtTime).toHaveBeenCalledWith(1, 0);
-    expect(outputGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(volumeGain.gain.setValueAtTime).toHaveBeenCalledWith(0.2, 0);
+    expect(volumeGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
       playSpy.mock.invocationCallOrder[0],
     );
-    expect(getLatestAudioElement().volume).toBe(0.2);
+    expect(getLatestAudioElement().volume).toBe(1);
 
     playSpy.mockRestore();
   });
@@ -265,5 +270,51 @@ describe("AudioGraph", () => {
     expect(graph).not.toBeNull();
     expect(player.audioContext).toBe(getLatestAudioContext() as unknown as AudioContext);
     expect(graph?.bands).toHaveLength(10);
+  });
+
+  it("fade does not corrupt player.volume and volume stays independent of fade (F-13)", async () => {
+    player = new Player({ mode: "html5", volume: 0.6 });
+    await player.load("https://cdn.example.com/song.mp3");
+    await player.play();
+
+    await player.fadeTo(0.3, 0); // instant fade multiplier
+
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
+
+    expect(player.volume).toBe(0.6); // authoritative user volume unchanged
+    expect(volumeGain.gain.value).toBe(0.6);
+    expect(fadeGain.gain.value).toBeCloseTo(0.3);
+
+    // setVolume behaves independently of the active fade multiplier.
+    player.setVolume(0.4);
+    expect(volumeGain.gain.value).toBe(0.4);
+    expect(fadeGain.gain.value).toBeCloseTo(0.3);
+  });
+
+  it("fadeOutAndPause resets the fade gain to 1 without touching volume", async () => {
+    player = new Player({ mode: "html5", volume: 0.7 });
+    await player.load("https://cdn.example.com/song.mp3");
+    await player.play();
+
+    await player.fadeOutAndPause(0);
+
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
+
+    expect(player.state).toBe("paused");
+    expect(fadeGain.gain.value).toBe(1); // fade multiplier reset (no restore hack)
+    expect(volumeGain.gain.value).toBe(0.7); // volume untouched
+  });
+
+  it("un-routed html5 (webAudioRouting:'never') applies volume to the element", async () => {
+    player = new Player({ mode: "html5", webAudioRouting: "never", volume: 0.5 });
+    await player.load("https://cdn.example.com/song.mp3");
+
+    expect(player.graph).toBeNull();
+    expect(getLatestAudioElement().volume).toBe(0.5);
+
+    player.setVolume(0.3);
+    expect(getLatestAudioElement().volume).toBe(0.3);
   });
 });

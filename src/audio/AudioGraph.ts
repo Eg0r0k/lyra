@@ -39,7 +39,10 @@ export class AudioGraph {
   private _inputGain: GainNode;
   private _normalizationGain: GainNode;
   private _eqFilters: BiquadFilterNode[] = [];
+  /** Fade multiplier gain (0..1 on top of volume). Driven only by fadeTo/cancelFade. */
   private _outputGain: GainNode;
+  /** User volume gain. Driven only by setVolume/setVolumeImmediate. */
+  private _volumeGain: GainNode;
   private _analyser: AnalyserNode;
 
   private _eqEnabled = true;
@@ -49,9 +52,10 @@ export class AudioGraph {
   private _freqDataArray: Uint8Array<ArrayBuffer>;
   private _timeDataArray: Uint8Array<ArrayBuffer>;
 
-  private _fadeTimer: ReturnType<typeof setTimeout> | null = null;
+  private _fadeTimer: number | null = null;
   private _fadeResolve: (() => void) | null = null;
-  private _preFadeVolume: number = 1;
+  /** Fade-gain value captured before a fade starts, restored on cancelFade. */
+  private _preFadeGain: number = 1;
 
   constructor(ctx: AudioContext, options: AudioGraphOptions = {}) {
     const { analyser: aOpts = {}, bands } = options;
@@ -62,9 +66,11 @@ export class AudioGraph {
     this._inputGain = ctx.createGain();
     this._normalizationGain = ctx.createGain();
     this._outputGain = ctx.createGain();
+    this._volumeGain = ctx.createGain();
 
     this._normalizationGain.gain.value = 1;
     this._outputGain.gain.value = 1;
+    this._volumeGain.gain.value = 1;
 
     this._analyser = ctx.createAnalyser();
     this._analyser.fftSize = aOpts.fftSize ?? 2048;
@@ -95,7 +101,7 @@ export class AudioGraph {
   }
 
   get output(): AudioNode {
-    return this._outputGain;
+    return this._volumeGain;
   }
 
   get analyzer(): AnalyserNode {
@@ -134,6 +140,8 @@ export class AudioGraph {
     this._normalizationGain.disconnect();
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
+    this._outputGain.disconnect();
+    this._volumeGain.disconnect();
 
     this._inputGain.connect(this._normalizationGain);
 
@@ -149,7 +157,10 @@ export class AudioGraph {
       this._normalizationGain.connect(this._analyser);
     }
 
+    // analyser (visualizer tap, pre-volume/fade — unchanged from prior chain)
+    // → fade multiplier → user volume → output.
     this._analyser.connect(this._outputGain);
+    this._outputGain.connect(this._volumeGain);
   }
 
   setEQBand(index: number, gain: number): void {
@@ -218,8 +229,8 @@ export class AudioGraph {
   }
 
   setVolume(volume: number): void {
-    this.cancelFade();
-    this._outputGain.gain.setTargetAtTime(
+    // Volume is independent of fade (F-13): drives _volumeGain, never cancels a fade.
+    this._volumeGain.gain.setTargetAtTime(
       Math.max(0, Math.min(1, volume)),
       this._ctx.currentTime,
       0.015,
@@ -227,9 +238,8 @@ export class AudioGraph {
   }
 
   setVolumeImmediate(volume: number): void {
-    this.cancelFade();
-    this._outputGain.gain.cancelScheduledValues(this._ctx.currentTime);
-    this._outputGain.gain.setValueAtTime(
+    this._volumeGain.gain.cancelScheduledValues(this._ctx.currentTime);
+    this._volumeGain.gain.setValueAtTime(
       Math.max(0, Math.min(1, volume)),
       this._ctx.currentTime,
     );
@@ -240,7 +250,7 @@ export class AudioGraph {
     durationSec: number,
     fromVolume?: number,
   ): Promise<void> {
-    this._preFadeVolume = this._outputGain.gain.value;
+    this._preFadeGain = this._outputGain.gain.value;
 
     this.cancelFade();
 
@@ -282,11 +292,11 @@ export class AudioGraph {
       this._fadeTimer = setTimeout(() => {
         gain.cancelScheduledValues(this._ctx.currentTime);
         gain.setValueAtTime(finalValue, this._ctx.currentTime);
-        this._preFadeVolume = finalValue;
+        this._preFadeGain = finalValue;
         this._fadeTimer = null;
         this._fadeResolve = null;
         resolve();
-      }, timerMs);
+      }, timerMs) as unknown as number;
     });
   }
 
@@ -302,7 +312,7 @@ export class AudioGraph {
     if (resolve) {
       const now = this._ctx.currentTime;
       this._outputGain.gain.cancelScheduledValues(now);
-      this._outputGain.gain.setValueAtTime(this._preFadeVolume, now);
+      this._outputGain.gain.setValueAtTime(this._preFadeGain, now);
       resolve();
     }
   }
@@ -324,5 +334,6 @@ export class AudioGraph {
     this._eqFilters.forEach((f) => f.disconnect());
     this._analyser.disconnect();
     this._outputGain.disconnect();
+    this._volumeGain.disconnect();
   }
 }

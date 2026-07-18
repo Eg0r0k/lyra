@@ -22,6 +22,7 @@ import {
   createDeferred,
   fetchMock,
   getLatestAudioElement,
+  getLatestGainNode,
   mockFetchSuccess,
   setAudioAutoLoadCanPlay,
   setMockAudioDuration,
@@ -420,17 +421,22 @@ describe("Player", () => {
 
       await player.load("https://cdn.example.com/song.mp3");
 
+      // Routed html5 (default): user volume/mute live on the graph volume gain;
+      // the element is pinned to unity (T-10 / F-11).
       player.setVolume(1.5);
       expect(player.volume).toBe(1);
+      expect(getLatestGainNode().gain.value).toBe(1);
       expect(getLatestAudioElement().volume).toBe(1);
 
       player.setVolume(-0.2);
       expect(player.volume).toBe(0);
-      expect(getLatestAudioElement().volume).toBe(0);
+      expect(getLatestGainNode().gain.value).toBe(0);
+      expect(getLatestAudioElement().volume).toBe(1);
 
       player.setMuted(true);
       expect(player.muted).toBe(true);
-      expect(getLatestAudioElement().muted).toBe(true);
+      expect(getLatestGainNode().gain.value).toBe(0);
+      expect(getLatestAudioElement().muted).toBe(false);
 
       player.toggleMute();
       expect(player.muted).toBe(false);

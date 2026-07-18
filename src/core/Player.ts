@@ -719,16 +719,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   setVolume(value: number): void {
     this._volume = Volume(value);
-
-    if (this._currentStrategy instanceof HTML5Strategy) {
-      this._currentStrategy.setVolume(this._volume);
-    } else if (this._audioGraph) {
-      this._audioGraph.setVolume(this._muted ? 0 : this._volume);
-
-      this._currentStrategy?.setVolume(Volume(1));
-    } else {
-      this._currentStrategy?.setVolume(this._volume);
-    }
+    this.applyVolumeAndMute();
 
     this.emit("volumechange", {
       volume: this._volume,
@@ -738,21 +729,35 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   setMuted(muted: boolean): void {
     this._muted = muted;
-
-    if (this._currentStrategy instanceof HTML5Strategy) {
-      this._currentStrategy.setMuted(muted);
-    } else if (this._audioGraph) {
-      this._currentStrategy?.setMuted(false);
-
-      this._audioGraph.setVolume(muted ? 0 : this._volume);
-    } else {
-      this._currentStrategy?.setMuted(muted);
-    }
+    this.applyVolumeAndMute();
 
     this.emit("volumechange", {
       volume: this._volume,
       muted: this._muted,
     });
+  }
+
+  /**
+   * Single volume-ownership rule (T-10). When the graph is routed, user volume
+   * and mute live on the graph's volume gain and the strategy is pinned to unity
+   * (fixes iOS html5 volume, F-11). When there is no graph (webAudioRouting
+   * 'never' or CORS fallback), volume/mute apply to the strategy (element).
+   */
+  private applyVolumeAndMute(immediate = false): void {
+    const target = this._muted ? 0 : this._volume;
+
+    if (this._audioGraph) {
+      if (immediate) {
+        this._audioGraph.setVolumeImmediate(target);
+      } else {
+        this._audioGraph.setVolume(target);
+      }
+      this._currentStrategy?.setVolume(Volume(1));
+      this._currentStrategy?.setMuted(false);
+    } else {
+      this._currentStrategy?.setVolume(this._volume);
+      this._currentStrategy?.setMuted(this._muted);
+    }
   }
 
   toggleMute(): void {
@@ -796,14 +801,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       await this.play();
     } else {
-      // Already playing: continue from the current gain instead of
+      // Already playing: continue from the current fade multiplier instead of
       // forcing an audible drop to silence before ramping back up.
       startFrom = undefined;
     }
 
-    const targetVol = this.getRestingGraphGain();
-
-    await this._audioGraph.fadeTo(targetVol, durationSec, startFrom);
+    // Fade is a multiplier on top of volume: fade in to full (1).
+    await this._audioGraph.fadeTo(1, durationSec, startFrom);
   }
 
   async fadeOut(durationSec: number = 1): Promise<void> {
@@ -819,7 +823,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this.pause();
 
-    void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
+    // Reset the fade multiplier to 1 while silent (paused). Volume is a separate
+    // gain and is untouched, so resuming plays at the user's volume.
+    void this._audioGraph?.fadeTo(1, 0);
   }
 
   async fadeOutAndStop(durationSec: number = 1): Promise<void> {
@@ -827,7 +833,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this.stop();
 
-    void this._audioGraph?.fadeTo(this.getRestingGraphGain(), 0);
+    void this._audioGraph?.fadeTo(1, 0);
   }
 
   cancelFade(): void {
@@ -1020,23 +1026,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._graphSourceNode = sourceNode;
 
-    this._audioGraph.setVolumeImmediate(this.getRestingGraphGain());
-
     this._audioGraph.output.disconnect();
 
     this._audioGraph.output.connect(this.audioContext.destination);
 
     sourceNode.connect(this._audioGraph.input);
 
-    if (this._currentStrategy instanceof HTML5Strategy) {
-      this._currentStrategy.setVolume(this._volume);
-
-      this._currentStrategy.setMuted(this._muted);
-    } else {
-      this._currentStrategy.setVolume(Volume(1));
-
-      this._currentStrategy.setMuted(false);
-    }
+    // Single ownership rule: volume/mute on the graph, strategy pinned to unity.
+    this.applyVolumeAndMute(true);
   }
 
   private teardownGraph(): void {
@@ -1045,14 +1042,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._audioGraph?.dispose();
     this._audioGraph = null;
-  }
-
-  private getRestingGraphGain(): number {
-    if (this._currentStrategy instanceof HTML5Strategy) {
-      return 1;
-    }
-
-    return this._muted ? 0 : this._volume;
   }
 
   private bindStrategyEvents(): void {

@@ -448,6 +448,20 @@ export function getLatestGainNode(): GainNode {
   return node as unknown as GainNode;
 }
 
+/**
+ * The AudioGraph fade gain — the second-to-last gain node created
+ * (chain: … → fadeGain → volumeGain). `getLatestGainNode()` returns the volume
+ * gain; this returns the fade gain that fadeTo/cancelFade drive.
+ */
+export function getFadeGainNode(): GainNode {
+  const ctx = getLatestAudioContext();
+  const node = ctx.createdGains[ctx.createdGains.length - 2];
+  if (!node) {
+    throw new Error("No mock fade gain node was created");
+  }
+  return node as unknown as GainNode;
+}
+
 export function getLatestBufferSourceNode(): AudioBufferSourceNode {
   const ctx = getLatestAudioContext();
   const node = ctx.createdBufferSources[ctx.createdBufferSources.length - 1];
