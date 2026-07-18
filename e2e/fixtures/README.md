@@ -16,6 +16,17 @@ which lacks proprietary-codec decoders). Chosen over MP3/AAC after probing
 ffmpeg -f lavfi -i anullsrc=r=8000:cl=mono -t 2 -c:a pcm_s16le silence.wav
 ```
 
+## `tone.wav` — audible PCM WAV (440 Hz sine)
+
+Used only by `unlock.spec.ts` to detect whether the engine enforces autoplay
+blocking. Autoplay policies allow *inaudible* media, so the silence fixture
+would falsely report "not blocked"; an audible tone is required for an accurate
+probe.
+
+```sh
+ffmpeg -f lavfi -i sine=frequency=440:sample_rate=8000:duration=2 -c:a pcm_s16le tone.wav
+```
+
 ## `hls/vod.m3u8` (+ `init.mp4`, `seg_*.m4s`) — HLS VOD, fMP4/AAC
 
 MSE HLS fixture for the hls.js path (exercised under Chromium only). Segment

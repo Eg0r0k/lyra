@@ -73,14 +73,24 @@ export default defineConfig({
     },
     {
       // Strict autoplay policy for the gesture-unlock flow: play() must reject
-      // before a gesture and succeed after a click. The policy is set
-      // explicitly — Chromium's automation default lets programmatic play
-      // through, which would defeat the test.
+      // before a gesture and succeed after a click.
+      //
+      // Playwright launches Chromium with
+      // `--autoplay-policy=no-user-gesture-required` by DEFAULT (a plain `args`
+      // override doesn't win against it), so `ignoreDefaultArgs` strips it and we
+      // re-add the strict policy. This is the correct config for an engine that
+      // honors it. NOTE: on this machine the Playwright chrome-headless-shell
+      // (and Firefox with media.autoplay prefs) still does NOT gate audible
+      // autoplay in automation, so unlock.spec self-skips after probing with an
+      // audible tone. The assertions run automatically on any build that enforces
+      // the policy. The negative is otherwise covered by jsdom unit tests (T-02)
+      // and the manual checklist (e2e/README.md).
       name: "chromium-strict-autoplay",
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: {
           args: ["--autoplay-policy=document-user-activation-required"],
+          ignoreDefaultArgs: ["--autoplay-policy=no-user-gesture-required"],
         },
       },
       testMatch: ["**/unlock.spec.ts"],

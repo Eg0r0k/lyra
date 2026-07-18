@@ -53,6 +53,7 @@ Recommended workflow: fix the P0 correctness block (T-01…T-05) first, stand up
 | F-31 | Player / StateManager | transition() return value ignored everywhere → silent divergence between intended and actual state | medium | supported by code | T-22 |
 | F-32 | strategies | Rate contract diverges: html5 preserves pitch (default preservesPitch), webaudio resamples (pitch shifts). Undocumented, no capability flag, no time-stretch path | medium | supported by code | T-23, T-24 |
 | F-33 | HLSHandler constructor | Raw console.debug bypasses playerLogger | low | supported by code | T-22 |
+| F-34 | Player.bindStrategyEvents (`waiting` handler) / StateManager | `waiting` → `transition("buffering")` is unguarded, but the FSM allows `buffering` only from `playing`. A `waiting` event in `ready`/`loading`/`paused` (e.g. the media element buffering at play-start before the `playing` transition, or a stall around load) emits an "Invalid state transition: X -> buffering" warning. `buffering → playing` itself is valid; the `playing` handler is already guarded by `is("buffering")`. | low | **author runtime observation (not static analysis)** — surfaced in T-06 browser runs, confirmed against the FSM table | T-08 |
 
 ## Part C. Justifications
 
@@ -323,24 +324,26 @@ Priority: P2 · Type: fix · Breaking: no · Score: S · Depends on: no · Close
 
 ### [ ] T-08 — Allow pause/togglePlay during buffering
 
-Priority: P1 · Type: fix · Breaking: no · Score: S · Depends on: no · Closes findings: F-10
+Priority: P1 · Type: fix · Breaking: no · Score: S · Depends on: no · Closes findings: F-10, F-34
 
-**Problem.** Player.pause() guards is("playing"); in buffering it silently no-ops although buffering→paused is a valid FSM transition. togglePlay() is consequently broken while buffering.
+**Problem.** Player.pause() guards is("playing"); in buffering it silently no-ops although buffering→paused is a valid FSM transition. togglePlay() is consequently broken while buffering. Separately (F-34, author runtime observation): the `waiting` strategy-event handler calls `transition("buffering")` unconditionally, but the FSM allows `buffering` only from `playing` — a `waiting` event in `ready`/`loading`/`paused` (media element buffering at play-start before the `playing` transition, or a stall around load) emits an "Invalid state transition: X -> buffering" warning.
 
 **Action steps.**
 1. Change pause() guard to _stateManager.isActive (playing|buffering).
 2. togglePlay(): base decision on _stateManager.isActive instead of isPlaying (strategy truth diverges while stalled).
 3. Audit stop() for the same class (it has no guard — confirm buffering→ready valid; it is).
+4. (F-34) Guard the `waiting` handler in bindStrategyEvents so it only `transition("buffering")` when `_stateManager.is("playing")` — buffering is reachable solely from `playing` per the FSM, so gate the emitter rather than widening the table. A `waiting` fired outside `playing` still emits the public `waiting` event but performs no state transition.
 
-**Contract.** FSM table unchanged. pause() from buffering → state paused, pause event.
+**Contract.** FSM table unchanged; `buffering` is entered only from `playing`. pause() from buffering → state paused, pause event. `waiting` outside `playing` → no state transition, no warning.
 
-**Don't do.** Don't touch strategy internals or waiting/playing event mapping.
+**Don't do.** Don't touch strategy internals or the strategy's own `waiting`/`playing` event emission; don't change the `playing` handler's `is("buffering")` guard; don't add `buffering` as a target from non-playing states in the FSM table (guard the handler instead).
 
 **Acceptance criteria.**
 - [ ] waiting → pause() → state paused, no FSM warning.
 - [ ] togglePlay() during buffering pauses.
+- [ ] (F-34) `waiting` fired while in `ready`/`paused` → no "Invalid state transition" warning and no bogus `buffering` transition; the public `waiting` event still fires.
 
-**Tests.** "pause during buffering transitions to paused" — catches F-10. "togglePlay during buffering pauses instead of double-playing" — catches the isPlaying divergence.
+**Tests.** "pause during buffering transitions to paused" — catches F-10. "togglePlay during buffering pauses instead of double-playing" — catches the isPlaying divergence. "waiting outside playing does not warn or transition to buffering" — catches F-34.
 
 **Risk.** HTML5 element may emit playing after pause if the stall resolves mid-call — verify the playing handler's is("buffering") guard prevents a bogus transition (it does; keep a regression test).
 
@@ -783,7 +786,7 @@ Priority: P1 · Type: docs · Breaking: no · Score: M · Depends on: T-02, T-03
 
 ### Finding coverage check
 
-F-01→T-03, F-02/F-03→T-04, F-04/F-06→T-02, F-05/F-09→T-01/T-09, F-07→T-05, F-08→T-15, F-10→T-08, F-11/F-12/F-13→T-10 (F-12 timer throttling itself: risk accepted — the ramp is audio-thread-scheduled so the late pause is inaudible; a worklet-based completion clock is not worth the complexity), F-14→T-13, F-15→T-14, F-16/F-17→T-11, F-18→T-12, F-19/F-20→T-16, F-21→T-17, F-22/F-28→T-18, F-23→T-19, F-24→T-20 (deferred per amendments.md — F-24 risk accepted for this pass), F-25→T-21, F-26/F-31/F-33→T-22a, F-27→T-22b, F-29→T-07, F-30→T-25, F-32→T-23/T-24.
+F-01→T-03, F-02/F-03→T-04, F-04/F-06→T-02, F-05/F-09→T-01/T-09, F-07→T-05, F-08→T-15, F-10→T-08, F-11/F-12/F-13→T-10 (F-12 timer throttling itself: risk accepted — the ramp is audio-thread-scheduled so the late pause is inaudible; a worklet-based completion clock is not worth the complexity), F-14→T-13, F-15→T-14, F-16/F-17→T-11, F-18→T-12, F-19/F-20→T-16, F-21→T-17, F-22/F-28→T-18, F-23→T-19, F-24→T-20 (deferred per amendments.md — F-24 risk accepted for this pass), F-25→T-21, F-26/F-31/F-33→T-22a, F-27→T-22b, F-29→T-07, F-30→T-25, F-32→T-23/T-24, F-34→T-08 (author runtime observation, folded into T-08).
 
 ## Part E. Open Questions
 

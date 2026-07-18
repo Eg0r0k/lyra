@@ -10,10 +10,10 @@
 | T-02 | Load-generation guard; autoplay decoupled from load() | DONE | ecf0a2b | 2026-07-18 | breaking → major (load() no longer rejects on autoplay block). play() captures strategy+signal, bails silently when superseded; autoplay branch swallows play() error (single PLAYBACK_NOT_ALLOWED emit, state stays ready). +3 tests, mock deferred-play hook. README note deferred to T-25. |
 | T-06 | Playwright matrix + local HLS fixtures | DONE | 27759d0 | 2026-07-18 | e2e/ scaffold: 3 engines + strict-autoplay project, dual-origin fixture server (CORS/no-CORS), tiny ffmpeg fixtures (WAV 32K + fMP4/AAC HLS VOD + live no-ENDLIST). Seed suite 7 pass +1 documented skip. Probed engines: WebKit-Win has NO Web Audio & NO native HLS; Chromium automation doesn't enforce autoplay block. Native-HLS 3-tier scheme + manual notes in e2e/README.md. WAV chosen over MP3/AAC via codec probe. |
 | T-03 | Native HLS path for Safari/iOS | TODO | | | |
-| T-04 | Web Audio routing policy + CORS rework | TODO | | | amended: no auto-retry |
+| T-04 | Web Audio routing policy + CORS rework | TODO | | | amended: no auto-retry. After implementing, revert to e2e and enable WebKit playback via `webAudioRouting: 'never'` (plain html5, no AudioContext) — best e2e proof the option works, since WebKit-Win has no Web Audio. Cross-origin CORS routes ready in e2e/server.mjs (`:4174` /cors + /nocors). |
 | T-05 | HLS runtime errors + recovery | TODO | | | |
 | T-07 | ESLint flat config | TODO | | | |
-| T-08 | pause/togglePlay during buffering | TODO | | | |
+| T-08 | pause/togglePlay during buffering | TODO | | | also closes F-34 (author runtime obs): guard `waiting` handler so `buffering` is entered only from `playing` (folded into T-08 spec). |
 | T-09 | Unified HTML5 readiness waiter | TODO | | | |
 | T-10 | Volume/fade gain split | TODO | | | breaking → major |
 | T-11 | Harden unlockAudio + auto-resume | TODO | | | |

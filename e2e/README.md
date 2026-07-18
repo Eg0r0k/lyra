@@ -45,11 +45,20 @@ Consequences, verified by probing the actual builds (not assumed):
   library routes all playback through an `AudioContext`, no playback path can run
   under this WebKit build. WebKit therefore only runs the honest native-HLS
   negative (`native-hls.spec.ts`). Real Safari/iOS playback is a manual check.
-- **Autoplay blocking is not enforced** by Playwright's Chromium here (a raw
-  `<audio>.play()` resolves and `AudioContext` auto-runs without a gesture, even
-  with `--autoplay-policy=document-user-activation-required`). `unlock.spec.ts`
-  detects this and **skips** with a reason; if a future build enforces the
-  policy the assertions run automatically.
+- **Autoplay blocking is not enforced** by Playwright's engines here. Verified
+  against an *audible* 440 Hz tone (autoplay policies allow inaudible/silent
+  media, so silence is not a valid probe): a raw `<audio>.play()` still resolves
+  and `AudioContext` auto-runs without a gesture in
+    - Chromium, even with `ignoreDefaultArgs: ['--autoplay-policy=no-user-gesture-required']`
+      plus an explicit `--autoplay-policy=document-user-activation-required`,
+      headless and headed; and
+    - Firefox, with `media.autoplay.default=1` (+ `blocking_policy=2`), headless
+      and headed.
+
+  (`ignoreDefaultArgs: true` — stripping every default to force the policy — just
+  breaks the launch, since Playwright's connection args go too.) `unlock.spec.ts`
+  probes with the tone and **skips** with a reason when blocking is not enforced;
+  the assertions run automatically on any build that does enforce the policy.
 
 ## Native HLS — three-tier verification scheme
 

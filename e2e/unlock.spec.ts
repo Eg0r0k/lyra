@@ -16,9 +16,16 @@ import { gotoHarness } from "./helpers";
 test("play() is blocked before a gesture and works after a click", async ({ page }) => {
   await gotoHarness(page);
 
+  // Detect with an AUDIBLE tone: autoplay policies allow inaudible/silent media,
+  // so a silence fixture would report "not enforced" even on an engine that does
+  // gate audible autoplay. Empirically, Playwright's Chromium (even with
+  // ignoreDefaultArgs stripping --autoplay-policy=no-user-gesture-required and a
+  // strict flag) and Firefox (media.autoplay.default=1/blocking_policy=2) both
+  // still resolve play() here — so this skips. It runs automatically on any
+  // build that actually enforces the policy.
   const enforcesAutoplayBlocking = await page.evaluate(async () => {
     const audio = document.createElement("audio");
-    audio.src = "/fixtures/silence.wav";
+    audio.src = "/fixtures/tone.wav";
     try {
       await audio.play();
       audio.pause();
@@ -37,7 +44,7 @@ test("play() is blocked before a gesture and works after a click", async ({ page
     const player = new window.Lyra.Player({ mode: "html5" });
     window.__player = player;
 
-    await player.load("/fixtures/silence.wav");
+    await player.load("/fixtures/tone.wav");
 
     let code: unknown = null;
     try {
