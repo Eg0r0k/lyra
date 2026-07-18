@@ -437,6 +437,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         metadata: prepared.metadata,
         requiresCrossOrigin:
           this._options.mode === "webaudio" || this._options.mode === "auto",
+        signal,
       });
 
       signal.throwIfAborted();
@@ -467,13 +468,18 @@ export class Player extends EventEmitter<PlayerEventMap> {
         await this.play();
       }
     } catch (err) {
+      if (!isCurrentLoad()) {
+        // A newer load() superseded this one. Any error here belongs to the
+        // abandoned load and MUST NOT touch the current load's state/FSM.
+        playerLogger.debug("Ignoring error from superseded load", err);
+        return;
+      }
+
       if (
         err instanceof CancellationError ||
         (err instanceof DOMException && err.name === "AbortError")
       ) {
-        if (isCurrentLoad()) {
-          this._stateManager.transition("idle");
-        }
+        this._stateManager.transition("idle");
 
         return;
       }

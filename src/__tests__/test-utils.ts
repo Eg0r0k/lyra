@@ -84,6 +84,12 @@ export class MockAudioContext {
   public static instances: MockAudioContext[] = [];
   public static decodeError: unknown = null;
   public static decodedDuration = 120;
+  /**
+   * When set, the next decodeAudioData() call returns this promise instead of
+   * resolving immediately (one-shot). Lets tests hold a decode open across a
+   * superseding load to exercise stale-rejection handling.
+   */
+  public static nextDecodeDeferred: Promise<AudioBuffer> | null = null;
 
   public state: AudioContextState = "running";
   public currentTime = 0;
@@ -139,6 +145,12 @@ export class MockAudioContext {
       throw MockAudioContext.decodeError;
     }
 
+    const deferred = MockAudioContext.nextDecodeDeferred;
+    if (deferred) {
+      MockAudioContext.nextDecodeDeferred = null;
+      return deferred;
+    }
+
     return {
       duration: MockAudioContext.decodedDuration,
     } as AudioBuffer;
@@ -156,6 +168,7 @@ export class MockAudioContext {
     MockAudioContext.instances = [];
     MockAudioContext.decodeError = null;
     MockAudioContext.decodedDuration = 120;
+    MockAudioContext.nextDecodeDeferred = null;
   }
 }
 
@@ -239,6 +252,19 @@ export class MockAudioElement extends EventTarget {
       if (audioMockState.nextLoadError) {
         this.error = audioMockState.nextLoadError;
         audioMockState.nextLoadError = null;
+        this.dispatchEvent(new Event("error"));
+        return;
+      }
+
+      if (!this.src) {
+        // Browsers reject an empty media source. HTML5Strategy.dispose() sets
+        // src="" and calls load(), which fires this error asynchronously —
+        // the canonical F-05 stale-rejection trigger.
+        this.error = new MockMediaError(
+          MockMediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+          "Empty media source",
+        );
+        this.readyState = 0;
         this.dispatchEvent(new Event("error"));
         return;
       }

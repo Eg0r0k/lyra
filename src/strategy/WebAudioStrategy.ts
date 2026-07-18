@@ -105,6 +105,10 @@ export class WebAudioStrategy
   async initialize(options: StrategyInitOptions): Promise<void> {
     playerLogger.debug("Initializing WebAudioStrategy");
 
+    if (options.signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
     if (!options.audioContext) {
       throw new PlayerError(
         "WebAudioStrategy requires AudioContext",

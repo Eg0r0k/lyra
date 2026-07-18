@@ -29,6 +29,11 @@ export interface StrategyInitOptions {
   preload: "none" | "metadata" | "auto";
   metadata?: Record<string, unknown>;
   requiresCrossOrigin?: boolean;
+  /**
+   * Per-load abort signal. Aborting it MUST reject {@link IPlaybackStrategy.initialize}
+   * with a `DOMException('Aborted', 'AbortError')` and tear down any pending waiters.
+   */
+  signal: AbortSignal;
 }
 
 export interface IPlaybackStrategy {

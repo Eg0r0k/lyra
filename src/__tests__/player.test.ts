@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Player } from "../index";
+import { Player, HTML5Strategy, createVolume, createPlaybackRate } from "../index";
 import type { HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
 import {
@@ -23,6 +23,7 @@ import {
   fetchMock,
   getLatestAudioElement,
   mockFetchSuccess,
+  setAudioAutoLoadCanPlay,
   setMockAudioDuration,
   setNextAudioLoadError,
 } from "./test-utils";
@@ -432,6 +433,105 @@ describe("Player", () => {
       expect(player.isReady).toBe(true);
       expect(player.isFading).toBe(false);
       expect(player.mode).toBe("html5");
+    });
+  });
+
+  describe("stale-load safety and signal threading (T-01)", () => {
+    it("keeps the player clean when a second load supersedes an in-flight html5 initialize", async () => {
+      setAudioAutoLoadCanPlay(false);
+
+      const player = trackPlayer(Player.auto());
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const loadA = player.load("https://cdn.example.com/a.mp3");
+
+      await vi.waitFor(() => {
+        expect(getLatestAudioElement().src).toBe("https://cdn.example.com/a.mp3");
+      });
+
+      setAudioAutoLoadCanPlay(true);
+
+      const loadB = player.load("https://cdn.example.com/b.mp3");
+
+      await expect(loadB).resolves.toBeUndefined();
+      await expect(loadA).resolves.toBeUndefined();
+
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(player.state).toBe("ready");
+    });
+
+    it("rejects initialize with AbortError when the load signal aborts", async () => {
+      setAudioAutoLoadCanPlay(false);
+
+      const strategy = new HTML5Strategy();
+      const controller = new AbortController();
+
+      const init = strategy.initialize({
+        sourceUrl: "https://cdn.example.com/a.mp3",
+        audioContext: new AudioContext(),
+        volume: createVolume(1),
+        muted: false,
+        playbackRate: createPlaybackRate(1),
+        loop: false,
+        preload: "auto",
+        signal: controller.signal,
+      });
+
+      controller.abort();
+
+      await expect(init).rejects.toMatchObject({ name: "AbortError" });
+
+      strategy.dispose();
+    });
+
+    it("swallows a stale webaudio decode rejection", async () => {
+      const decodeA = createDeferred<AudioBuffer>();
+      MockAudioContext.nextDecodeDeferred = decodeA.promise;
+
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const loadA = player.load({ data: createArrayBuffer() });
+
+      await vi.waitFor(() => {
+        expect(MockAudioContext.nextDecodeDeferred).toBeNull();
+      });
+
+      const loadB = player.load({ data: createArrayBuffer() });
+      await expect(loadB).resolves.toBeUndefined();
+
+      decodeA.reject(new Error("late decode failure"));
+      await expect(loadA).resolves.toBeUndefined();
+
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(player.state).toBe("ready");
+    });
+
+    it("aborts the only in-flight load silently and rolls back", async () => {
+      // No public API cancels the *current* load while keeping the player
+      // alive: load() again makes the prior load stale (not current), and
+      // _cancellation is private. dispose() is the only public path that
+      // aborts the current load, so it is used here to exercise the
+      // isCurrentLoad()+AbortError branch. The transient "idle" transition is
+      // immediately superseded by "disposed"; we assert the abort is silent.
+      setAudioAutoLoadCanPlay(false);
+
+      const player = trackPlayer(Player.auto());
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const load = player.load("https://cdn.example.com/a.mp3");
+
+      await vi.waitFor(() => {
+        expect(getLatestAudioElement().src).toBe("https://cdn.example.com/a.mp3");
+      });
+
+      await player.dispose();
+      await expect(load).resolves.toBeUndefined();
+
+      expect(errorSpy).not.toHaveBeenCalled();
     });
   });
 });

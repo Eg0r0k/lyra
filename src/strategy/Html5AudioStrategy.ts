@@ -59,6 +59,11 @@ export class HTML5Strategy
   private _sourceNode: MediaElementAudioSourceNode | null = null;
   private _isReady = false;
   private _wasBuffering = false;
+  /**
+   * Cleanup for the currently pending initialize() waiter, if any.
+   * Invoked by dispose() so teardown can't fire the waiter's error path.
+   */
+  private _activeInitCleanup: (() => void) | null = null;
 
   private _onPlay = () => {
     this.emit("play");
@@ -140,6 +145,10 @@ export class HTML5Strategy
    */
 
   async initialize(options: StrategyInitOptions): Promise<void> {
+    if (options.signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
     this._audio.volume = options.volume;
     this._audio.muted = options.muted;
     this._audio.playbackRate = options.playbackRate;
@@ -159,7 +168,9 @@ export class HTML5Strategy
           this._audio.removeEventListener("loadedmetadata", onLoadedMetadata);
           this._audio.removeEventListener("canplay", onCanPlay);
           this._audio.removeEventListener("error", onError);
+          options.signal.removeEventListener("abort", onAbort);
           clearTimeout(timer);
+          this._activeInitCleanup = null;
         };
 
         const onLoadedMetadata = () => {
@@ -177,16 +188,24 @@ export class HTML5Strategy
           reject(this.createMediaError());
         };
 
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error("Timeout waiting for attached media readiness"));
         }, 30_000);
+
+        this._activeInitCleanup = cleanup;
 
         this._audio.addEventListener("loadedmetadata", onLoadedMetadata, {
           once: true,
         });
         this._audio.addEventListener("canplay", onCanPlay, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
+        options.signal.addEventListener("abort", onAbort, { once: true });
       });
 
       this._isReady = true;
@@ -213,13 +232,22 @@ export class HTML5Strategy
           cleanup();
           reject(this.createMediaError());
         };
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException("Aborted", "AbortError"));
+        };
         const cleanup = () => {
           this._audio.removeEventListener("canplay", onCanPlay);
           this._audio.removeEventListener("error", onError);
+          options.signal.removeEventListener("abort", onAbort);
+          this._activeInitCleanup = null;
         };
+
+        this._activeInitCleanup = cleanup;
 
         this._audio.addEventListener("canplay", onCanPlay, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
+        options.signal.addEventListener("abort", onAbort, { once: true });
         this._audio.load();
       });
 
@@ -235,7 +263,9 @@ export class HTML5Strategy
           this._audio.removeEventListener("loadedmetadata", onMeta);
           this._audio.removeEventListener("canplay", onCanPlay);
           this._audio.removeEventListener("error", onError);
+          options.signal.removeEventListener("abort", onAbort);
           clearTimeout(timer);
+          this._activeInitCleanup = null;
         };
 
         const onMeta = () => {
@@ -253,14 +283,22 @@ export class HTML5Strategy
           reject(this.createMediaError());
         };
 
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error("Timeout waiting for loadedmetadata"));
         }, 30_000);
 
+        this._activeInitCleanup = cleanup;
+
         this._audio.addEventListener("loadedmetadata", onMeta, { once: true });
         this._audio.addEventListener("canplay", onCanPlay, { once: true });
         this._audio.addEventListener("error", onError, { once: true });
+        options.signal.addEventListener("abort", onAbort, { once: true });
       });
 
       this._isReady = true;
@@ -403,6 +441,8 @@ export class HTML5Strategy
    */
   dispose(): void {
     playerLogger.debug("HTML5Strategy dispose");
+    this._activeInitCleanup?.();
+    this._activeInitCleanup = null;
     this._audio.pause();
     this._audio.src = "";
     this._audio.load();
