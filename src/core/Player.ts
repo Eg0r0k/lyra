@@ -508,6 +508,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       const capabilities = this._sourceManager.getActiveCapabilities();
 
+      // Runtime (post-load) error channel: the handler (e.g. HLS) surfaces
+      // unrecoverable errors here after its own recovery is exhausted (F-07).
+      capabilities?.onRuntimeError?.((err) => this.handleRuntimeError(err));
+
       if (capabilities?.qualityLevels?.length) {
         this.emit("qualitiesavailable", capabilities.qualityLevels);
       }
@@ -552,6 +556,23 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       throw playerError;
     }
+  }
+
+  /**
+   * Surfaces an unrecoverable runtime error from the active handler (e.g. an
+   * HLS fatal error after recovery is exhausted): emit once and transition to
+   * error. Recoverable errors never reach here — the handler retries silently.
+   */
+  private handleRuntimeError(error: PlayerError): void {
+    playerLogger.error("Runtime error:", error);
+
+    this._stateManager.transition("error");
+
+    this.emit("error", {
+      code: error.code,
+      message: error.message,
+      cause: error.cause,
+    });
   }
 
   async play(): Promise<void> {
@@ -1035,7 +1056,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
 
     if (this._currentStrategy instanceof HTML5Strategy) {
-      this._currentStrategy.attachErrorHandler();
+      // A handler that owns a runtime-error channel (HLS) surfaces element
+      // failures itself; attaching the element error handler too would emit the
+      // error twice. Only attach it when no such channel exists.
+      if (!this._sourceManager.getActiveCapabilities()?.onRuntimeError) {
+        this._currentStrategy.attachErrorHandler();
+      }
     }
 
     this._currentStrategy.on("pause", () => {

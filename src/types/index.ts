@@ -68,6 +68,14 @@ export interface HlsInstance {
   attachMedia(element: HTMLMediaElement): void;
   detachMedia(): void;
   destroy(): void;
+  /** Resume/retry loading after a fatal network error. */
+  startLoad(): void;
+  /** Stop loading (used before teardown). */
+  stopLoad(): void;
+  /** Recover from a fatal media (buffer append / decode) error. */
+  recoverMediaError(): void;
+  /** Swap audio codec, then call recoverMediaError() again, as a second media-error attempt. */
+  swapAudioCodec(): void;
   currentLevel: number;
   levels: Array<{ bitrate: number; audioCodec?: string }>;
   on(event: string, callback: (...args: unknown[]) => void): void;

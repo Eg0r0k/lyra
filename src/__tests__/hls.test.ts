@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Player } from "../index";
 import type { HlsConstructor } from "../types";
+import { PlayerErrorCode } from "../types/events";
 
 class MockHls {
   public static readonly Events = {
@@ -71,6 +72,21 @@ class MockHls {
 
   public destroy(): void {
     this.listeners.clear();
+  }
+
+  public readonly startLoad = vi.fn(() => undefined);
+  public readonly stopLoad = vi.fn(() => undefined);
+  public readonly recoverMediaError = vi.fn(() => undefined);
+  public readonly swapAudioCodec = vi.fn(() => undefined);
+
+  /** Test helper: emit a fatal HLS error of the given type. */
+  public emitError(type: string, details = "fatal"): void {
+    this.emit(MockHls.Events.ERROR, undefined, { fatal: true, type, details });
+  }
+
+  /** Test helper: emit a fragment-buffered event (simulates recovered playback). */
+  public emitFragBuffered(): void {
+    this.emit(MockHls.Events.FRAG_BUFFERED);
   }
 
   public on(event: string, callback: (...args: unknown[]) => void): void {
@@ -147,5 +163,131 @@ describe("HLS", () => {
 
     player.setQuality(-1);
     expect(player.getCurrentQuality()).toBe(-1);
+  });
+
+  const loadAndPlay = async (p: Player): Promise<MockHls> => {
+    await p.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+    await p.play();
+    return MockHls.instances[MockHls.instances.length - 1];
+  };
+
+  it("fatal network error triggers startLoad retries then HLS_NETWORK", async () => {
+    vi.useFakeTimers();
+    try {
+      player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const hls = await loadAndPlay(player);
+      expect(player.state).toBe("playing");
+
+      // Retry 1 (1s), 2 (2s), 3 (4s): startLoad with exponential backoff.
+      hls.emitError("networkError");
+      expect(hls.startLoad).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(hls.startLoad).toHaveBeenCalledTimes(1);
+
+      hls.emitError("networkError");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(hls.startLoad).toHaveBeenCalledTimes(2);
+
+      hls.emitError("networkError");
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(hls.startLoad).toHaveBeenCalledTimes(3);
+
+      // Playback state untouched, no error yet.
+      expect(player.state).toBe("playing");
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Retries exhausted → single HLS_NETWORK error + error state.
+      hls.emitError("networkError");
+      expect(hls.startLoad).toHaveBeenCalledTimes(3);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ code: PlayerErrorCode.HLS_NETWORK }),
+      );
+      expect(player.state).toBe("error");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fatal media error recovers via recoverMediaError without player error", async () => {
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+    const errorSpy = vi.fn();
+    player.on("error", errorSpy);
+
+    const hls = await loadAndPlay(player);
+
+    // Stage 1: recoverMediaError only.
+    hls.emitError("mediaError");
+    expect(hls.recoverMediaError).toHaveBeenCalledTimes(1);
+    expect(hls.swapAudioCodec).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(player.state).toBe("playing");
+
+    // Stage 2: swapAudioCodec + recoverMediaError.
+    hls.emitError("mediaError");
+    expect(hls.swapAudioCodec).toHaveBeenCalledTimes(1);
+    expect(hls.recoverMediaError).toHaveBeenCalledTimes(2);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // Exhausted: single HLS_MEDIA error + error state.
+    hls.emitError("mediaError");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ code: PlayerErrorCode.HLS_MEDIA }),
+    );
+    expect(player.state).toBe("error");
+  });
+
+  it("resets the network retry budget after playback recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const hls = await loadAndPlay(player);
+
+      hls.emitError("networkError");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(hls.startLoad).toHaveBeenCalledTimes(1);
+
+      // Playback resumes → retry budget resets.
+      hls.emitFragBuffered();
+
+      // A fresh network error starts the budget over (1s backoff again).
+      hls.emitError("networkError");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(hls.startLoad).toHaveBeenCalledTimes(2);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleanup during backoff leaves no timers", async () => {
+    vi.useFakeTimers();
+    try {
+      player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+      const hls = await loadAndPlay(player);
+
+      hls.emitError("networkError"); // schedules a 1s backoff timer
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      await player.dispose();
+      player = null;
+
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(hls.startLoad).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -15,14 +15,42 @@ import { PlayerError, PlayerErrorCode } from "../../types/events";
 import { IPlaybackStrategy } from "../../strategy/IPlaybackStrategy";
 import { HTML5Strategy } from "../../strategy/Html5AudioStrategy";
 import { isHlsSource } from "./hls-source";
+import { playerLogger } from "../../utils/Logger";
+
+interface HlsLevel {
+  bitrate: number;
+  audioCodec?: string;
+}
+
+interface HlsManifestParsedData {
+  levels: HlsLevel[];
+}
+
+interface HlsErrorData {
+  fatal?: boolean;
+  type?: string;
+  details?: string;
+}
 
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
-
   private _hls: HlsInstance | null = null;
   private _Hls: HlsConstructor | null;
   private _config: Partial<HLSConfig>;
   private _qualityLevels: QualityLevel[] = [];
+
+  // --- runtime recovery session state (F-07) ---
+  /** Retained load signal so backoff retries abort with the load. */
+  private _signal: AbortSignal | null = null;
+  /** Player callback for unrecoverable runtime errors. */
+  private _onRuntimeError: ((error: PlayerError) => void) | null = null;
+  private _backoffTimer: number | null = null;
+  private _networkRetries = 0;
+  /** 0 = none, 1 = did recoverMediaError, 2 = did swapAudioCodec+recover. */
+  private _mediaRecoveryStage = 0;
+
+  /** Fatal network errors: up to 3 startLoad() retries with 1s/2s/4s backoff. */
+  private static readonly MAX_NETWORK_RETRIES = 3;
 
   constructor(config?: Partial<HLSConfig>, HlsClass?: HlsConstructor) {
     this._config = config ?? DEFAULT_OPTIONS.hlsConfig;
@@ -108,7 +136,11 @@ export class HLSHandler implements ISourceHandler {
     const Hls = this._Hls;
     const hls = this._hls;
 
+    this._signal = signal;
+
     return new Promise<PreparedSource>((resolve, reject) => {
+      let resolved = false;
+
       const onAbort = () => {
         reject(new DOMException("Aborted", "AbortError"));
         this.cleanup();
@@ -121,6 +153,7 @@ export class HLSHandler implements ISourceHandler {
 
       const checkReady = () => {
         if (manifestParsed && mediaAttached && firstFragBuffered) {
+          resolved = true;
           signal.removeEventListener("abort", onAbort);
           resolve({
             duration: audioElement.duration || 0,
@@ -131,9 +164,10 @@ export class HLSHandler implements ISourceHandler {
         }
       };
 
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event: unknown, data: any) => {
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event: unknown, data: unknown) => {
         manifestParsed = true;
-        this._qualityLevels = data.levels.map((lvl: any, index: number) => ({
+        const parsed = data as HlsManifestParsedData;
+        this._qualityLevels = parsed.levels.map((lvl, index) => ({
           index,
           bitrate: lvl.bitrate,
           label: this.formatBitrate(lvl.bitrate),
@@ -151,28 +185,31 @@ export class HLSHandler implements ISourceHandler {
         if (!firstFragBuffered) {
           firstFragBuffered = true;
           checkReady();
+        } else {
+          // Playback progressing again → a prior recovery succeeded; reset.
+          this._networkRetries = 0;
+          this._mediaRecoveryStage = 0;
         }
       });
 
-      hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
-        if (data.fatal) {
+      // Persistent error listener — survives resolution. Pre-ready fatals fail
+      // the load (as before); post-ready fatals go through recovery (F-07).
+      hls.on(Hls.Events.ERROR, (_event: unknown, data: unknown) => {
+        const err = data as HlsErrorData;
+
+        if (!err.fatal) {
+          playerLogger.debug("HLS non-fatal error", err.type, err.details);
+          return;
+        }
+
+        if (!resolved) {
           signal.removeEventListener("abort", onAbort);
           this.cleanup();
-          let code = PlayerErrorCode.HLS_FATAL;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            code = PlayerErrorCode.HLS_NETWORK;
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            code = PlayerErrorCode.HLS_MEDIA;
-          }
-
-          reject(
-            new PlayerError(
-              `HLS Error: ${data.type} - ${data.details}`,
-              code,
-              data,
-            ),
-          );
+          reject(this.toPlayerError(err));
+          return;
         }
+
+        this.handleFatalRuntimeError(err);
       });
 
       hls.attachMedia(audioElement);
@@ -192,6 +229,9 @@ export class HLSHandler implements ISourceHandler {
       },
       getCurrentQuality: () => this._hls?.currentLevel ?? -1,
       isLive: false,
+      onRuntimeError: (callback: (error: PlayerError) => void) => {
+        this._onRuntimeError = callback;
+      },
     };
   }
 
@@ -201,12 +241,104 @@ export class HLSHandler implements ISourceHandler {
       : `${Math.round(bps / 1000)} kbps`;
   }
 
+  private toPlayerError(data: HlsErrorData): PlayerError {
+    const Hls = this._Hls;
+    let code = PlayerErrorCode.HLS_FATAL;
+    if (Hls && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      code = PlayerErrorCode.HLS_NETWORK;
+    } else if (Hls && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      code = PlayerErrorCode.HLS_MEDIA;
+    }
+    return new PlayerError(
+      `HLS Error: ${data.type} - ${data.details}`,
+      code,
+      data,
+    );
+  }
+
+  /**
+   * Post-load fatal error recovery (F-07):
+   * - fatal NETWORK_ERROR → up to 3 startLoad() retries with 1s/2s/4s backoff,
+   * - fatal MEDIA_ERROR → recoverMediaError(), then swapAudioCodec()+recover,
+   * - otherwise (or exhausted) → destroy + surface via onRuntimeError.
+   */
+  private handleFatalRuntimeError(data: HlsErrorData): void {
+    const Hls = this._Hls;
+    const hls = this._hls;
+    if (!Hls || !hls) return;
+
+    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      if (this._networkRetries < HLSHandler.MAX_NETWORK_RETRIES) {
+        const attempt = this._networkRetries;
+        this._networkRetries += 1;
+        const delayMs = 1000 * 2 ** attempt; // 1s, 2s, 4s
+        playerLogger.debug(
+          `HLS fatal network error — retry ${attempt + 1}/${HLSHandler.MAX_NETWORK_RETRIES} in ${delayMs}ms`,
+        );
+        this._backoffTimer = setTimeout(() => {
+          this._backoffTimer = null;
+          if (this._signal?.aborted) return;
+          this._hls?.startLoad();
+        }, delayMs) as unknown as number;
+        return;
+      }
+      this.surfaceFatal(PlayerErrorCode.HLS_NETWORK, data);
+      return;
+    }
+
+    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      if (this._mediaRecoveryStage === 0) {
+        this._mediaRecoveryStage = 1;
+        playerLogger.debug("HLS fatal media error — recoverMediaError()");
+        hls.recoverMediaError();
+        return;
+      }
+      if (this._mediaRecoveryStage === 1) {
+        this._mediaRecoveryStage = 2;
+        playerLogger.debug(
+          "HLS fatal media error — swapAudioCodec() + recoverMediaError()",
+        );
+        hls.swapAudioCodec();
+        hls.recoverMediaError();
+        return;
+      }
+      this.surfaceFatal(PlayerErrorCode.HLS_MEDIA, data);
+      return;
+    }
+
+    this.surfaceFatal(PlayerErrorCode.HLS_FATAL, data);
+  }
+
+  private surfaceFatal(code: PlayerErrorCode, data: HlsErrorData): void {
+    const error = new PlayerError(
+      `HLS Error: ${data.type} - ${data.details}`,
+      code,
+      data,
+    );
+    const notify = this._onRuntimeError;
+    this.cleanup();
+    notify?.(error);
+  }
+
   private cleanup(): void {
+    if (this._backoffTimer !== null) {
+      clearTimeout(this._backoffTimer);
+      this._backoffTimer = null;
+    }
     if (this._hls) {
+      try {
+        this._hls.detachMedia();
+      } catch {
+        // ignore detach failures during teardown
+      }
       this._hls.destroy();
       this._hls = null;
     }
     this._qualityLevels = [];
+    this._networkRetries = 0;
+    this._mediaRecoveryStage = 0;
+    this._signal = null;
+    this._onRuntimeError = null;
   }
 
   dispose(): void {
