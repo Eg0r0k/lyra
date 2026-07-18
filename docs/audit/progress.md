@@ -6,7 +6,7 @@
 
 | Task | Title | Status | Commit | Date | Notes |
 |------|-------|--------|--------|------|-------|
-| T-01 | Stale-load error gating + AbortSignal into strategies | DONE | (see follow-up) | 2026-07-18 | Catch gated by signal identity (swallow stale); `StrategyInitOptions.signal` required + threaded into both strategies; html5 waiters abort-aware; dispose detaches init waiters. +4 tests, mock empty-src error + deferred decode. |
+| T-01 | Stale-load error gating + AbortSignal into strategies | DONE | b9d3f8b | 2026-07-18 | Catch gated by signal identity (swallow stale); `StrategyInitOptions.signal` required + threaded into both strategies; html5 waiters abort-aware; dispose detaches init waiters. +4 tests, mock empty-src error + deferred decode. |
 | T-02 | Load-generation guard; autoplay decoupled from load() | TODO | | | breaking → major |
 | T-06 | Playwright matrix + local HLS fixtures | TODO | | | moved before T-03/T-04 |
 | T-03 | Native HLS path for Safari/iOS | TODO | | | |
