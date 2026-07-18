@@ -26,6 +26,8 @@ import {
   setAudioAutoLoadCanPlay,
   setMockAudioDuration,
   setNextAudioLoadError,
+  setNextAudioPlayDeferred,
+  setNextAudioPlayError,
 } from "./test-utils";
 
 class MockHls {
@@ -532,6 +534,69 @@ describe("Player", () => {
       await expect(load).resolves.toBeUndefined();
 
       expect(errorSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("autoplay decoupling and play-generation guard (T-02)", () => {
+    it("resolves load with a single error when autoplay is blocked", async () => {
+      setNextAudioPlayError(new DOMException("Autoplay blocked", "NotAllowedError"));
+
+      const player = trackPlayer(new Player({ autoplay: true }));
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      await expect(
+        player.load("https://cdn.example.com/song.mp3"),
+      ).resolves.toBeUndefined();
+
+      expect(player.state).toBe("ready");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ code: PlayerErrorCode.PLAYBACK_NOT_ALLOWED }),
+      );
+    });
+
+    it("ignores a play() that resolves after a newer load()", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/a.mp3");
+
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      const playGate = createDeferred<void>();
+      setNextAudioPlayDeferred(playGate.promise);
+
+      const elementA = getLatestAudioElement();
+      const playPromise = player.play();
+
+      await vi.waitFor(() => {
+        expect(elementA.playPending).toBe(true);
+      });
+
+      const loadB = player.load("https://cdn.example.com/b.mp3");
+      await expect(loadB).resolves.toBeUndefined();
+
+      playGate.resolve();
+      await expect(playPromise).resolves.toBeUndefined();
+
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(player.state).toBe("ready");
+    });
+
+    it("rethrows PLAYBACK_NOT_ALLOWED to the caller on manual play", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/song.mp3");
+
+      setNextAudioPlayError(new DOMException("blocked", "NotAllowedError"));
+      const errorSpy = vi.fn();
+      player.on("error", errorSpy);
+
+      await expect(player.play()).rejects.toMatchObject({
+        code: PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
+      });
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(player.state).toBe("ready");
     });
   });
 });

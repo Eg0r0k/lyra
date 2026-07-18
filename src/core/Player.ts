@@ -465,7 +465,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
       }
 
       if (this._options.autoplay) {
-        await this.play();
+        // load() succeeds once the source is ready. A blocked/failed autoplay
+        // is a separate signal: play() already emitted exactly one
+        // PLAYBACK_NOT_ALLOWED error event, so swallow here — do NOT reject
+        // load() or re-emit, and keep the state at "ready" (F-04).
+        try {
+          await this.play();
+        } catch (err) {
+          playerLogger.debug("Autoplay blocked after load", err);
+        }
       }
     } catch (err) {
       if (!isCurrentLoad()) {
@@ -510,7 +518,21 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // Load-generation guard: capture the strategy/signal owning this play() so a
+    // newer load() that supersedes us mid-await cannot mutate state for a
+    // stale/disposed strategy (F-06).
+    const strategy = this._currentStrategy;
+    const signal = this._cancellation?.signal;
+    const isCurrent = (): boolean =>
+      this._currentStrategy === strategy &&
+      this._cancellation?.signal === signal;
+
     await this.getAudioContext();
+
+    if (!isCurrent()) {
+      playerLogger.debug("play() superseded during getAudioContext; ignoring");
+      return;
+    }
 
     if (!this._graphSourceNode) {
       this.setupAudioGraph();
@@ -518,11 +540,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     try {
       await this._currentStrategy.play();
-
-      this._stateManager.transition("playing");
-
-      playerLogger.debug("Playback started");
     } catch (error) {
+      if (!isCurrent()) {
+        playerLogger.debug(
+          "play() failed after being superseded; ignoring",
+          error,
+        );
+
+        return;
+      }
+
       playerLogger.error("Playback failed:", error);
 
       const playerError = PlayerError.fromError(
@@ -538,6 +565,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       throw playerError;
     }
+
+    if (!isCurrent()) {
+      playerLogger.debug("play() resolved after a newer load(); ignoring");
+
+      return;
+    }
+
+    this._stateManager.transition("playing");
+
+    playerLogger.debug("Playback started");
   }
 
   pause(): void {

@@ -201,6 +201,7 @@ type AudioMockState = {
   loadDelayMs: number;
   nextLoadError: MockMediaError | null;
   nextPlayError: Error | null;
+  nextPlayDeferred: Promise<void> | null;
 };
 
 const audioMockState: AudioMockState = {
@@ -210,6 +211,7 @@ const audioMockState: AudioMockState = {
   loadDelayMs: 0,
   nextLoadError: null,
   nextPlayError: null,
+  nextPlayDeferred: null,
 };
 
 export class MockAudioElement extends EventTarget {
@@ -227,6 +229,8 @@ export class MockAudioElement extends EventTarget {
   public loop = false;
   public error: MockMediaError | null = null;
   public readonly buffered: TimeRanges = createTimeRanges();
+  /** True while play() is parked on a test-supplied deferred (see setNextAudioPlayDeferred). */
+  public playPending = false;
   private readonly attributes = new Map<string, string>();
 
   constructor() {
@@ -294,6 +298,17 @@ export class MockAudioElement extends EventTarget {
       const error = audioMockState.nextPlayError;
       audioMockState.nextPlayError = null;
       throw error;
+    }
+
+    const deferred = audioMockState.nextPlayDeferred;
+    if (deferred) {
+      audioMockState.nextPlayDeferred = null;
+      this.playPending = true;
+      try {
+        await deferred;
+      } finally {
+        this.playPending = false;
+      }
     }
 
     this.paused = false;
@@ -364,6 +379,7 @@ export function resetBrowserMocks(): void {
   audioMockState.loadDelayMs = 0;
   audioMockState.nextLoadError = null;
   audioMockState.nextPlayError = null;
+  audioMockState.nextPlayDeferred = null;
   objectUrlCounter = 0;
 }
 
@@ -381,6 +397,10 @@ export function setNextAudioLoadError(error: MockMediaError): void {
 
 export function setNextAudioPlayError(error: Error): void {
   audioMockState.nextPlayError = error;
+}
+
+export function setNextAudioPlayDeferred(promise: Promise<void>): void {
+  audioMockState.nextPlayDeferred = promise;
 }
 
 export function setMockAudioDuration(duration: number): void {
