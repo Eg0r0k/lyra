@@ -734,4 +734,59 @@ describe("Player", () => {
       expect(getLatestAudioElement().crossOrigin).toBeNull();
     });
   });
+
+  describe("buffering controls + FSM completeness (T-08)", () => {
+    it("pause during buffering transitions to paused (F-10)", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+
+      getLatestAudioElement().emitWaiting();
+      expect(player.state).toBe("buffering");
+
+      player.pause();
+      expect(player.state).toBe("paused");
+    });
+
+    it("togglePlay during buffering pauses instead of double-playing (F-10)", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+
+      getLatestAudioElement().emitWaiting();
+      expect(player.state).toBe("buffering");
+
+      await player.togglePlay();
+      expect(player.state).toBe("paused");
+    });
+
+    it("waiting while ready enters buffering without an FSM warning (F-34)", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/song.mp3");
+      expect(player.state).toBe("ready");
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      getLatestAudioElement().emitWaiting();
+
+      expect(player.state).toBe("buffering");
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.stringContaining("Invalid state transition"),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("waiting after resume from paused enters buffering (F-34)", async () => {
+      const player = trackPlayer(Player.auto());
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+      player.pause();
+      expect(player.state).toBe("paused");
+
+      getLatestAudioElement().emitWaiting();
+      expect(player.state).toBe("buffering");
+    });
+  });
 });

@@ -659,7 +659,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   pause(): void {
-    if (!this._currentStrategy || !this._stateManager.is("playing")) {
+    // F-10: allow pause() from buffering too (buffering→paused is valid).
+    if (!this._currentStrategy || !this._stateManager.isActive) {
       return;
     }
 
@@ -671,7 +672,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async togglePlay(): Promise<void> {
-    if (this.isPlaying) {
+    // F-10: base the decision on FSM activity, not strategy.isPlaying, which
+    // diverges from the state while stalled (buffering).
+    if (this._stateManager.isActive) {
       this.pause();
     } else {
       await this.play();

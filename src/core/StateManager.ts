@@ -4,9 +4,11 @@ import { playerLogger } from "../utils/Logger";
 const VALID_TRANSITIONS: Record<PlayerState, PlayerState[]> = {
   idle: ["loading", "disposed"],
   loading: ["ready", "error", "idle", "disposed"],
-  ready: ["playing", "loading", "idle", "disposed"],
+  // `buffering` (F-34) and `error` (F-35) added: buffering occurs at the initial
+  // stall/resume, and a runtime error can surface while ready or paused.
+  ready: ["playing", "loading", "idle", "disposed", "buffering", "error"],
   playing: ["paused", "buffering", "ready", "error", "idle", "disposed"],
-  paused: ["playing", "ready", "loading", "idle", "disposed"],
+  paused: ["playing", "ready", "loading", "idle", "disposed", "buffering", "error"],
   buffering: ["playing", "paused", "ready", "error", "idle", "disposed"],
   error: ["loading", "idle", "disposed"],
   disposed: [],

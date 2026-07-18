@@ -290,4 +290,42 @@ describe("HLS", () => {
       vi.useRealTimers();
     }
   });
+
+  it("runtime error while paused transitions to error (F-35)", async () => {
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+    const hls = await loadAndPlay(player);
+
+    player.pause();
+    expect(player.state).toBe("paused");
+
+    const errorSpy = vi.fn();
+    player.on("error", errorSpy);
+
+    // Non-network/non-media fatal → immediate give-up, surfaced while paused.
+    hls.emitError("otherError");
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ code: PlayerErrorCode.HLS_FATAL }),
+    );
+    expect(player.state).toBe("error");
+  });
+
+  it("runtime error while ready (after load, before play) transitions to error (F-35)", async () => {
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+    expect(player.state).toBe("ready");
+
+    const hls = MockHls.instances[MockHls.instances.length - 1];
+    const errorSpy = vi.fn();
+    player.on("error", errorSpy);
+
+    hls.emitError("otherError");
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(player.state).toBe("error");
+  });
 });

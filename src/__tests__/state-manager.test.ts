@@ -73,6 +73,38 @@ describe("StateManager", () => {
     warnSpy.mockRestore();
   });
 
+  it("allows ready and paused to enter buffering (F-34)", () => {
+    const fromReady = new StateManager();
+    fromReady.transition("loading");
+    fromReady.transition("ready");
+    expect(fromReady.transition("buffering")).toBe(true);
+    expect(fromReady.state).toBe("buffering");
+
+    const fromPaused = new StateManager();
+    fromPaused.transition("loading");
+    fromPaused.transition("ready");
+    fromPaused.transition("playing");
+    fromPaused.transition("paused");
+    expect(fromPaused.transition("buffering")).toBe(true);
+    expect(fromPaused.state).toBe("buffering");
+  });
+
+  it("allows ready and paused to enter error (F-35)", () => {
+    const fromReady = new StateManager();
+    fromReady.transition("loading");
+    fromReady.transition("ready");
+    expect(fromReady.transition("error")).toBe(true);
+    expect(fromReady.state).toBe("error");
+
+    const fromPaused = new StateManager();
+    fromPaused.transition("loading");
+    fromPaused.transition("ready");
+    fromPaused.transition("playing");
+    fromPaused.transition("paused");
+    expect(fromPaused.transition("error")).toBe(true);
+    expect(fromPaused.state).toBe("error");
+  });
+
   it("treats disposed as a terminal state", () => {
     const manager = new StateManager();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
