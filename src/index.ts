@@ -30,6 +30,7 @@ export { UrlHandler } from "./source/handlers/UrlHandler";
 export { BlobHandler } from "./source/handlers/BlobHandler";
 export { BufferHandler } from "./source/handlers/BufferHandler";
 export { HLSHandler } from "./source/handlers/HLSHandler";
+export { NativeHlsHandler } from "./source/handlers/NativeHlsHandler";
 
 // ============ Audio ============
 export { AudioGraph } from "./audio/AudioGraph";

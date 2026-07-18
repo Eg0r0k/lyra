@@ -12,6 +12,7 @@ import { SourceManager } from "../source/SourceManager";
 import type { ISourceHandler, SourceCapabilities } from "../source/ISourceHandler";
 import type { AudioSource, HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
+import { setNativeHlsSupport } from "./test-utils";
 
 class MockHls {
   public static isSupported(): boolean {
@@ -68,6 +69,49 @@ describe("SourceManager", () => {
       manager.getHandler({ url: "https://cdn.example.com/live/playlist.m3u8", type: "hls" })
         .id,
     ).toBe("hls");
+  });
+
+  it("selects the native HLS handler when MSE is unavailable but canPlayType is truthy", () => {
+    setNativeHlsSupport(true);
+    const manager = new SourceManager(); // no Hls injected
+
+    expect(
+      manager.getHandler({
+        url: "https://cdn.example.com/live/playlist.m3u8",
+        type: "hls",
+      }).id,
+    ).toBe("hls-native");
+  });
+
+  it("prefers hls.js over native HLS when both are available", () => {
+    setNativeHlsSupport(true);
+    const manager = new SourceManager({ Hls: MockHls as unknown as HlsConstructor });
+
+    expect(
+      manager.getHandler({
+        url: "https://cdn.example.com/live/playlist.m3u8",
+        type: "hls",
+      }).id,
+    ).toBe("hls");
+  });
+
+  it("throws an actionable LOAD_NOT_SUPPORTED for HLS with neither hls.js nor native support", () => {
+    setNativeHlsSupport(false);
+    const manager = new SourceManager();
+
+    try {
+      manager.getHandler({
+        url: "https://cdn.example.com/live/playlist.m3u8",
+        type: "hls",
+      });
+      throw new Error("expected getHandler to throw");
+    } catch (e) {
+      expect(e).toMatchObject({ code: PlayerErrorCode.LOAD_NOT_SUPPORTED });
+      const message =
+        e && typeof e === "object" && "message" in e ? String(e.message) : "";
+      expect(message).toMatch(/hls\.js/i);
+      expect(message).toMatch(/native/i);
+    }
   });
 
   it("prefers registered custom handlers over defaults", () => {

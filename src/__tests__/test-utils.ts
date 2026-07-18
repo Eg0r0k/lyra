@@ -348,6 +348,7 @@ export class MockAudioElement extends EventTarget {
 export const fetchMock = vi.fn<typeof fetch>();
 
 let objectUrlCounter = 0;
+let nativeHlsSupported = false;
 
 export function installBrowserMocks(): void {
   vi.stubGlobal("Audio", MockAudioElement);
@@ -368,6 +369,16 @@ export function installBrowserMocks(): void {
     return `blob:mock-${objectUrlCounter}`;
   });
   vi.spyOn(urlObject, "revokeObjectURL").mockImplementation(() => undefined);
+
+  // NativeHlsHandler probes `document.createElement("audio").canPlayType(...)`.
+  // jsdom returns "" (no native HLS); drive it via nativeHlsSupported so tests
+  // can simulate Safari/iOS. Auto-resets each test in resetBrowserMocks().
+  vi.spyOn(window.HTMLMediaElement.prototype, "canPlayType").mockImplementation(
+    (type: string): CanPlayTypeResult =>
+      type === "application/vnd.apple.mpegurl" && nativeHlsSupported
+        ? "maybe"
+        : "",
+  );
 }
 
 export function resetBrowserMocks(): void {
@@ -381,6 +392,7 @@ export function resetBrowserMocks(): void {
   audioMockState.nextPlayError = null;
   audioMockState.nextPlayDeferred = null;
   objectUrlCounter = 0;
+  nativeHlsSupported = false;
 }
 
 export function setAudioAutoLoadCanPlay(value: boolean): void {
@@ -401,6 +413,10 @@ export function setNextAudioPlayError(error: Error): void {
 
 export function setNextAudioPlayDeferred(promise: Promise<void>): void {
   audioMockState.nextPlayDeferred = promise;
+}
+
+export function setNativeHlsSupport(supported: boolean): void {
+  nativeHlsSupported = supported;
 }
 
 export function setMockAudioDuration(duration: number): void {

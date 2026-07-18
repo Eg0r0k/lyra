@@ -25,6 +25,7 @@ import {
   mockFetchSuccess,
   setAudioAutoLoadCanPlay,
   setMockAudioDuration,
+  setNativeHlsSupport,
   setNextAudioLoadError,
   setNextAudioPlayDeferred,
   setNextAudioPlayError,
@@ -327,6 +328,22 @@ describe("Player", () => {
         player.load({ url: "https://cdn.example.com/live/stream.m3u8", type: "hls" }),
       ).rejects.toMatchObject({ code: PlayerErrorCode.LOAD_NOT_SUPPORTED });
       expect(player.state).toBe("error");
+    });
+
+    it("plays an HLS URL via the native html5 element when hls.js is absent", async () => {
+      setNativeHlsSupport(true);
+      const player = trackPlayer(Player.auto());
+
+      await player.load({
+        url: "https://cdn.example.com/live/stream.m3u8",
+        type: "hls",
+      });
+
+      expect(player.state).toBe("ready");
+      expect(player.mode).toBe("html5");
+      expect(getLatestAudioElement().src).toBe(
+        "https://cdn.example.com/live/stream.m3u8",
+      );
     });
 
     it("maps HTML5 media network errors to LOAD_NETWORK instead of format errors", async () => {

@@ -14,6 +14,7 @@ import {
 import { PlayerError, PlayerErrorCode } from "../../types/events";
 import { IPlaybackStrategy } from "../../strategy/IPlaybackStrategy";
 import { HTML5Strategy } from "../../strategy/Html5AudioStrategy";
+import { isHlsSource } from "./hls-source";
 
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
@@ -52,10 +53,7 @@ export class HLSHandler implements ISourceHandler {
       return false;
     }
 
-    const url = source.url?.toLowerCase() ?? "";
-    return (
-      url.includes(".m3u8") || source.format === "m3u8" || source.type === "hls"
-    );
+    return isHlsSource(source);
   }
 
   preferredStrategy(): "html5" | "webaudio" | "any" {

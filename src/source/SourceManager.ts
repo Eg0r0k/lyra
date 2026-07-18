@@ -1,6 +1,13 @@
 import { AudioSource, HLSConfig, HlsConstructor } from "../types";
 import { ISourceHandler, SourceCapabilities } from "./ISourceHandler";
-import { UrlHandler, BlobHandler, BufferHandler, HLSHandler } from "./handlers";
+import {
+  UrlHandler,
+  BlobHandler,
+  BufferHandler,
+  HLSHandler,
+  NativeHlsHandler,
+} from "./handlers";
+import { isHlsSource } from "./handlers/hls-source";
 import { PlayerError, PlayerErrorCode } from "../types/events";
 
 export interface SourceManagerOptions {
@@ -27,6 +34,9 @@ export class SourceManager {
       //noop
     }
 
+    // Native HLS (Safari/iOS) — after MSE hls.js, before generic handlers.
+    this._handlers.push(new NativeHlsHandler());
+
     // Buffer
     this._handlers.push(new BufferHandler());
 
@@ -48,6 +58,14 @@ export class SourceManager {
       if (canHandle) {
         return handler;
       }
+    }
+
+    if (isHlsSource(source)) {
+      throw new PlayerError(
+        "HLS playback is unavailable: no hls.js was injected (use `new Player({ Hls })`) " +
+          "and this browser has no native HLS support (Safari/iOS only).",
+        PlayerErrorCode.LOAD_NOT_SUPPORTED,
+      );
     }
 
     throw new PlayerError(
