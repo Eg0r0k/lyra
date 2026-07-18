@@ -224,7 +224,7 @@ Priority: P0 · Type: fix · Breaking: no (default preserves routing) · Score: 
 
 **Contract.** webAudioRouting: 'always'|'never', default 'always'. player.graph === null whenever routing is off or fallback triggered. Fade methods already no-op on null graph — keep.
 
-**Don't do.** Don't attempt lazy mid-playback attachment (createMediaElementSource after load can't undo CORS decisions); don't change webaudio-strategy routing.
+**Don't do.** Don't attempt lazy mid-playback attachment (createMediaElementSource after load can't undo CORS decisions); don't change webaudio-strategy routing. Don't insert any `await` in the path from `bindStrategyEvents` to `transition("ready")` in Player.load() — today that stretch is synchronous, which is what keeps `loading→buffering` unreachable and F-34 scoped to `ready`/`paused`; an `await` there lets a `waiting` event land in `loading` and re-open the F-34 warning. If an `await` is unavoidable (e.g. the reworked `setupAudioGraph`), add `loading→buffering` to `VALID_TRANSITIONS` in this same task.
 
 **Acceptance criteria.**
 - [ ] webAudioRouting:'never' html5 load creates no AudioContext (assert mock ctor uncalled) and graph===null.
@@ -363,7 +363,7 @@ Priority: P1 · Type: refactor · Breaking: no · Score: S · Depends on: T-01 �
 
 **Contract.** Timeout error surfaces as LOAD_NETWORK. Waiter resolves on the earliest readiness event.
 
-**Don't do.** Don't make the timeout configurable yet; don't change readiness thresholds (readyState >= 1 fast-paths stay).
+**Don't do.** Don't make the timeout configurable yet; don't change readiness thresholds (readyState >= 1 fast-paths stay). Don't insert any `await` in the path from `bindStrategyEvents` to `transition("ready")` in Player.load() — that stretch is synchronous today, which keeps `loading→buffering` unreachable and F-34 scoped to `ready`/`paused`; an `await` there lets a `waiting` event land in `loading` and re-open the F-34 warning. The new waiter belongs inside `strategy.initialize()` (before `bindStrategyEvents`), so this holds; if any `await` does land in that path, add `loading→buffering` to `VALID_TRANSITIONS` in this same task.
 
 **Acceptance criteria.**
 - [ ] A source that never fires canplay rejects load() with LOAD_NETWORK after the timeout (fake timers).
