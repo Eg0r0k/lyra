@@ -8,6 +8,7 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -27,6 +28,7 @@
     "test:watch": "vitest",
     "test:browser": "pnpm build && playwright test",
     "typecheck": "tsc --noEmit",
+    "size": "pnpm build && node scripts/check-size.mjs",
     "release:patch": "pnpm typecheck && pnpm build && npm version patch && pnpm publish",
     "release:minor": "pnpm typecheck && pnpm build && npm version minor && pnpm publish",
     "release:major": "pnpm typecheck && pnpm build && npm version major && pnpm publish",
