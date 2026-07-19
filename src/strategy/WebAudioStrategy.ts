@@ -177,20 +177,38 @@ export class WebAudioStrategy
         const ctx = options.audioContext;
         const gain = this._gainNode;
 
-        this._stretcher = await options.timeStretch(ctx);
+        try {
+          this._stretcher = await options.timeStretch(ctx);
+        } catch (error) {
+          // The plugin is optional: a factory that rejects (worklet module or
+          // WASM that failed to load) must degrade to resampling, NOT fail the
+          // load (T-24 contract: no new error codes). Warn once so it is not
+          // silent; canPreservePitch stays false since no node was attached.
+          this._stretcher = null;
+          playerLogger.warn(
+            "time-stretch plugin factory failed; falling back to resampling " +
+              "(pitch shifts with playbackRate)",
+            error,
+          );
+        }
 
         if (options.signal.aborted) {
-          this._stretcher.dispose();
+          this._stretcher?.dispose();
           this._stretcher = null;
           throw new DOMException("Aborted", "AbortError");
         }
 
-        // source → gain → stretcher → (connectToGraph) → AudioGraph.input, so
-        // EQ/analyser act on the pitch-corrected, time-stretched signal (T-24).
-        gain?.connect(this._stretcher.node);
-        this._stretcher.setRate(this._playbackRate);
+        if (this._stretcher) {
+          // source → gain → stretcher → (connectToGraph) → AudioGraph.input, so
+          // EQ/analyser act on the pitch-corrected, time-stretched signal (T-24).
+          gain?.connect(this._stretcher.node);
+          this._stretcher.setRate(this._playbackRate);
 
-        playerLogger.debug("Time-stretch plugin attached", `rate=${this._playbackRate}`);
+          playerLogger.debug(
+            "Time-stretch plugin attached",
+            `rate=${this._playbackRate}`,
+          );
+        }
       }
     } else if (options.sourceUrl) {
       throw new PlayerError(

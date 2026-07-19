@@ -1508,5 +1508,33 @@ describe("Player", () => {
       expect(stretch.setRate).not.toHaveBeenCalled();
       expect(player.canPreservePitch).toBe(false);
     });
+
+    it("degrades to resampling when the plugin factory fails (load survives, one warn)", async () => {
+      const warn = vi.spyOn(playerLogger, "warn");
+      const player = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          // Worklet module / WASM that never loads — the optional plugin fails.
+          timeStretch: () =>
+            Promise.reject(new Error("worklet module failed to load")),
+        }),
+      );
+
+      // An optional plugin failure must NOT reject load() (no new error codes)…
+      await expect(
+        player.load({ data: createArrayBuffer() }),
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1); // one fallback warn at load time
+
+      // …it falls back to resampling: no node attached, so the flag is honest
+      // and the source carries the rate (pitch shifts).
+      expect(player.canPreservePitch).toBe(false);
+
+      await player.play();
+      player.setPlaybackRate(1.5);
+      expect(getLatestBufferSourceNode().playbackRate.value).toBe(1.5);
+
+      warn.mockRestore();
+    });
   });
 });
