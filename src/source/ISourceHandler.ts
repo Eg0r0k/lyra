@@ -21,6 +21,12 @@ export interface SourceCapabilities {
   supportsSeek?: boolean;
   isLive?: boolean;
   /**
+   * Seekable range of the current source (seconds), when the handler can
+   * report it — e.g. the media element's `seekable` for HLS. Returns `null`
+   * when no range is available (used to clamp live seeks). Optional.
+   */
+  getSeekableRange?(): { start: number; end: number } | null;
+  /**
    * Runtime (post-load) error channel. A handler that surfaces its own runtime
    * errors (e.g. HLS fatal errors after recovery is exhausted) registers the
    * player callback here. Presence of this also signals the player to let the

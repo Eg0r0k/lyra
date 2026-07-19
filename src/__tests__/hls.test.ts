@@ -11,14 +11,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Player } from "../index";
 import type { HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
+import { getLatestAudioElement } from "./test-utils";
 
 class MockHls {
   public static readonly Events = {
     MANIFEST_PARSED: "manifestParsed",
     MEDIA_ATTACHED: "mediaAttached",
     FRAG_BUFFERED: "fragBuffered",
+    LEVEL_LOADED: "levelLoaded",
     ERROR: "error",
   };
+
+  /** When true, the next load emits a live LEVEL_LOADED + Infinity duration. */
+  public static live = false;
 
   public static readonly ErrorTypes = {
     NETWORK_ERROR: "networkError",
@@ -48,6 +53,9 @@ class MockHls {
       this.emit(MockHls.Events.MANIFEST_PARSED, undefined, {
         levels: this.levels,
       });
+      this.emit(MockHls.Events.LEVEL_LOADED, undefined, {
+        details: { live: MockHls.live },
+      });
       this.emit(MockHls.Events.FRAG_BUFFERED);
     });
   }
@@ -59,7 +67,7 @@ class MockHls {
         duration: number;
       };
       audio.readyState = 4;
-      audio.duration = 180;
+      audio.duration = MockHls.live ? Infinity : 180;
       audio.dispatchEvent(new Event("loadedmetadata"));
       audio.dispatchEvent(new Event("canplay"));
       this.emit(MockHls.Events.MEDIA_ATTACHED);
@@ -115,6 +123,7 @@ describe("HLS", () => {
       player = null;
     }
     MockHls.instances = [];
+    MockHls.live = false;
   });
 
   it("emits qualitiesavailable with QualityLevel payloads", async () => {
@@ -350,5 +359,73 @@ describe("HLS", () => {
     expect(destroySpy).toHaveBeenCalledTimes(1); // old session torn down on reset
     expect(MockHls.instances).toHaveLength(2); // fresh session for load 2
     expect(player.state).toBe("ready"); // handler still usable (not disposed)
+  });
+
+  it("live manifest reports isLive and Infinity duration (T-15/F-08)", async () => {
+    MockHls.live = true;
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+
+    const timeupdates: number[] = [];
+    player.on("timeupdate", ({ progress }) => timeupdates.push(progress));
+
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+
+    expect(player.isLive).toBe(true);
+    expect(player.duration).toBe(Infinity);
+
+    // progress is 0 for live even as time advances.
+    const el = getLatestAudioElement();
+    el.currentTime = 42;
+    el.dispatchEvent(new Event("timeupdate"));
+    expect(timeupdates[timeupdates.length - 1]).toBe(0);
+  });
+
+  it("clamps live seeks to the seekable range and no-ops when empty (T-15/F-08)", async () => {
+    MockHls.live = true;
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+
+    const el = getLatestAudioElement();
+    el.setSeekableRange(30, 120);
+
+    player.seek(500); // beyond the window → clamp to end
+    expect(el.currentTime).toBe(120);
+
+    player.seek(5); // before the window → clamp to start
+    expect(el.currentTime).toBe(30);
+
+    // Empty seekable window → seek is a no-op (no seeking emitted, no move).
+    el.setSeekableRange(0, 0);
+    const seeking = vi.fn();
+    player.on("seeking", seeking);
+    player.seek(60);
+    expect(seeking).not.toHaveBeenCalled();
+    expect(el.currentTime).toBe(30);
+  });
+
+  it("VOD stream keeps finite duration and real progress (T-15 regression)", async () => {
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+
+    const progresses: number[] = [];
+    player.on("timeupdate", ({ progress }) => progresses.push(progress));
+
+    await player.load({
+      url: "https://cdn.example.com/vod/playlist.m3u8",
+      type: "hls",
+    });
+
+    expect(player.isLive).toBe(false);
+    expect(player.duration).toBe(180);
+
+    const el = getLatestAudioElement();
+    el.currentTime = 90;
+    el.dispatchEvent(new Event("timeupdate"));
+    expect(progresses[progresses.length - 1]).toBeCloseTo(0.5);
   });
 });

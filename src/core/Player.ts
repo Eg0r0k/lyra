@@ -196,6 +196,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._stateManager.isPlayable;
   }
 
+  /**
+   * Whether the active source is a live stream (unbounded). For live sources
+   * {@link Player.duration} is `Infinity` and `timeupdate.progress` is `0`.
+   * `false` when no source is loaded or the handler reports no live capability.
+   */
+  get isLive(): boolean {
+    return this._sourceManager.getActiveCapabilities()?.isLive ?? false;
+  }
+
   get isFading(): boolean {
     return this._audioGraph?.isFading ?? false;
   }
@@ -786,7 +795,22 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    const safeTime = TimeSeconds(Math.max(0, Math.min(time, this.duration)));
+    let safeTime: TimeSeconds;
+    if (this.isLive) {
+      // Live: clamp to the element's seekable window; ignore when empty.
+      const range = this._sourceManager
+        .getActiveCapabilities()
+        ?.getSeekableRange?.();
+      if (!range || range.end <= range.start) {
+        playerLogger.debug("Seek ignored: live stream has no seekable range");
+        return;
+      }
+      safeTime = TimeSeconds(
+        Math.max(range.start, Math.min(time, range.end)),
+      );
+    } else {
+      safeTime = TimeSeconds(Math.max(0, Math.min(time, this.duration)));
+    }
 
     playerLogger.debug("Seeking to:", safeTime);
 
@@ -1160,10 +1184,20 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
 
     this._currentStrategy.on("timeupdate", (time) => {
+      const duration = this.duration;
+      // Progress is meaningless for live (unbounded / sliding-window duration),
+      // so it is 0 for live streams and for a non-finite/zero duration. hls.js
+      // live reports a FINITE window duration, hence the isLive gate rather than
+      // relying on duration === Infinity (native HLS only).
+      const progress =
+        this.isLive || !Number.isFinite(duration) || duration <= 0
+          ? 0
+          : time / duration;
+
       this.emit("timeupdate", {
         currentTime: time,
-        duration: this.duration,
-        progress: this.duration > 0 ? time / this.duration : 0,
+        duration,
+        progress,
       });
     });
 

@@ -14,7 +14,8 @@ export function Volume(value: number): Volume {
 }
 
 export function TimeSeconds(value: number): TimeSeconds {
-  if (value < 0 || !Number.isFinite(value)) {
+  // Live streams report Infinity duration — permit it; reject only negatives/NaN.
+  if (Number.isNaN(value) || value < 0) {
     return 0 as TimeSeconds;
   }
   return value as TimeSeconds;

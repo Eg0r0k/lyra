@@ -22,6 +22,8 @@ export class NativeHlsHandler implements ISourceHandler {
 
   /** Cached `canPlayType` probe result (probed once, lazily). */
   private _supportsNativeHls: boolean | null = null;
+  /** Media element of the active load — source of isLive + seekable range. */
+  private _mediaElement: HTMLMediaElement | null = null;
 
   canHandle(source: AudioSource): boolean {
     return isHlsSource(source) && this.supportsNativeHls();
@@ -37,7 +39,7 @@ export class NativeHlsHandler implements ISourceHandler {
 
   async prepare(
     source: AudioSource,
-    _strategy: IPlaybackStrategy,
+    strategy: IPlaybackStrategy,
     _ctx: AudioContext | null,
     _signal: AbortSignal,
   ): Promise<PreparedSource> {
@@ -48,6 +50,9 @@ export class NativeHlsHandler implements ISourceHandler {
       );
     }
 
+    // Retain the element so getCapabilities() can report live/seekable from it.
+    this._mediaElement = strategy.getMediaElement?.() ?? null;
+
     // Plain element src path: the browser's native pipeline handles the playlist.
     return {
       sourceUrl: source.url,
@@ -56,15 +61,28 @@ export class NativeHlsHandler implements ISourceHandler {
   }
 
   getCapabilities(): SourceCapabilities | null {
+    const element = this._mediaElement;
     // Native HLS exposes no level API; quality methods are intentionally absent.
     return {
       qualityLevels: [],
-      isLive: false,
+      // Live playlists surface an Infinity duration once metadata is loaded.
+      isLive: element ? element.duration === Infinity : false,
+      getSeekableRange: () => {
+        const ranges = element?.seekable;
+        if (!ranges || ranges.length === 0) {
+          return null;
+        }
+        return { start: ranges.start(0), end: ranges.end(ranges.length - 1) };
+      },
     };
   }
 
+  reset(): void {
+    this._mediaElement = null;
+  }
+
   dispose(): void {
-    // noop — no per-load session state.
+    this._mediaElement = null;
   }
 
   private supportsNativeHls(): boolean {

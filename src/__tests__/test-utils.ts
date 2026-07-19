@@ -245,11 +245,13 @@ export class MockMediaError extends Error {
   }
 }
 
-function createTimeRanges(): TimeRanges {
+function createTimeRanges(
+  ranges: Array<{ start: number; end: number }> = [],
+): TimeRanges {
   return {
-    length: 0,
-    start: () => 0,
-    end: () => 0,
+    length: ranges.length,
+    start: (i: number) => ranges[i].start,
+    end: (i: number) => ranges[i].end,
   };
 }
 
@@ -288,6 +290,8 @@ export class MockAudioElement extends EventTarget {
   public loop = false;
   public error: MockMediaError | null = null;
   public readonly buffered: TimeRanges = createTimeRanges();
+  /** Seekable window; live streams populate it (see setSeekableRange). */
+  public seekable: TimeRanges = createTimeRanges();
   /** True while play() is parked on a test-supplied deferred (see setNextAudioPlayDeferred). */
   public playPending = false;
   private readonly attributes = new Map<string, string>();
@@ -296,6 +300,11 @@ export class MockAudioElement extends EventTarget {
     super();
     this.duration = audioMockState.defaultDuration;
     audioMockState.instances.push(this);
+  }
+
+  /** Test helper: set the seekable window (used to exercise live seek clamping). */
+  public setSeekableRange(start: number, end: number): void {
+    this.seekable = createTimeRanges([{ start, end }]);
   }
 
   public setAttribute(name: string, value: string): void {

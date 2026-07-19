@@ -32,12 +32,20 @@ interface HlsErrorData {
   details?: string;
 }
 
+interface HlsLevelLoadedData {
+  details?: { live?: boolean };
+}
+
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
   private _hls: HlsInstance | null = null;
   private _Hls: HlsConstructor | null;
   private _config: Partial<HLSConfig>;
   private _qualityLevels: QualityLevel[] = [];
+  /** Live flag derived from LEVEL_LOADED manifest details (F-08). */
+  private _isLive = false;
+  /** Media element of the active load — source of the seekable range. */
+  private _mediaElement: HTMLMediaElement | null = null;
 
   // --- runtime recovery session state (F-07) ---
   /** Retained load signal so backoff retries abort with the load. */
@@ -137,6 +145,7 @@ export class HLSHandler implements ISourceHandler {
         PlayerErrorCode.LOAD_NOT_SUPPORTED,
       );
     }
+    this._mediaElement = audioElement;
     const Hls = this._Hls;
     const hls = this._hls;
 
@@ -196,6 +205,11 @@ export class HLSHandler implements ISourceHandler {
         }
       });
 
+      hls.on(Hls.Events.LEVEL_LOADED, (_event: unknown, data: unknown) => {
+        const levelData = data as HlsLevelLoadedData;
+        this._isLive = levelData.details?.live ?? false;
+      });
+
       // Persistent error listener — survives resolution. Pre-ready fatals fail
       // the load (as before); post-ready fatals go through recovery (F-07).
       hls.on(Hls.Events.ERROR, (_event: unknown, data: unknown) => {
@@ -232,11 +246,20 @@ export class HLSHandler implements ISourceHandler {
         }
       },
       getCurrentQuality: () => this._hls?.currentLevel ?? -1,
-      isLive: false,
+      isLive: this._isLive,
+      getSeekableRange: () => this.readSeekableRange(),
       onRuntimeError: (callback: (error: PlayerError) => void) => {
         this._onRuntimeError = callback;
       },
     };
+  }
+
+  private readSeekableRange(): { start: number; end: number } | null {
+    const ranges = this._mediaElement?.seekable;
+    if (!ranges || ranges.length === 0) {
+      return null;
+    }
+    return { start: ranges.start(0), end: ranges.end(ranges.length - 1) };
   }
 
   private formatBitrate(bps: number): string {
@@ -343,6 +366,8 @@ export class HLSHandler implements ISourceHandler {
       this._hls = null;
     }
     this._qualityLevels = [];
+    this._isLive = false;
+    this._mediaElement = null;
     this._networkRetries = 0;
     this._mediaRecoveryStage = 0;
     this._signal = null;
