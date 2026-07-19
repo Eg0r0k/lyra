@@ -4,6 +4,16 @@ import type {
   TimeStretchFactory,
 } from "../strategy/ITimeStretchNode";
 
+type ParamEventType = "setValue" | "linearRamp" | "expRamp" | "setTarget";
+
+interface ParamEvent {
+  type: ParamEventType;
+  value: number;
+  time: number;
+  timeConstant?: number;
+  order: number;
+}
+
 type MockParam = {
   value: number;
   setValueAtTime: (value: number, time: number) => void;
@@ -13,23 +23,109 @@ type MockParam = {
   cancelScheduledValues: (time: number) => void;
 };
 
-function createAudioParam(initialValue: number): MockParam {
-  const param: MockParam = {
-    value: initialValue,
-    setValueAtTime: vi.fn((value: number) => {
-      param.value = value;
-    }),
-    setTargetAtTime: vi.fn((value: number) => {
-      param.value = value;
-    }),
-    linearRampToValueAtTime: vi.fn((value: number) => {
-      param.value = value;
-    }),
-    exponentialRampToValueAtTime: vi.fn((value: number) => {
-      param.value = value;
-    }),
-    cancelScheduledValues: vi.fn(() => undefined),
+/**
+ * A scheduling AudioParam mock (T-31). Unlike the old mock that applied every
+ * ramp instantly, `value` is computed from the automation timeline at the
+ * owning context's `currentTime` (advance it with {@link advanceAudioTime}):
+ * - `setValueAtTime` — step change at `time`.
+ * - `linearRampToValueAtTime` — linear interpolation from the previous anchor.
+ * - `exponentialRampToValueAtTime` — geometric interpolation; THROWS for a
+ *   target <= 0 or a ramp-start value <= 0 (as real browsers do — this is what
+ *   makes the AudioGraph SILENCE_GAIN floor a testable invariant).
+ * - `setTargetAtTime` — asymptotic `target + (V0 - target) * e^(-(t-start)/tc)`
+ *   approach, so smoothing is genuinely gradual rather than instantaneous.
+ * - `cancelScheduledValues` — drops events at/after `time`.
+ * Direct `param.value = x` resets the timeline to a constant.
+ */
+function createAudioParam(
+  initialValue: number,
+  getNow: () => number,
+): MockParam {
+  let baseValue = initialValue;
+  let events: ParamEvent[] = [];
+  let order = 0;
+
+  const sorted = (): ParamEvent[] =>
+    [...events].sort((a, b) => a.time - b.time || a.order - b.order);
+
+  const computeAt = (t: number): number => {
+    let anchorValue = baseValue;
+    let anchorTime = 0;
+    let result = baseValue;
+
+    for (const ev of sorted()) {
+      if (ev.time <= t) {
+        if (ev.type === "setTarget") {
+          const tc = ev.timeConstant ?? 0;
+          result =
+            tc <= 0
+              ? ev.value
+              : ev.value +
+                (anchorValue - ev.value) * Math.exp(-(t - ev.time) / tc);
+        } else {
+          result = ev.value;
+        }
+        anchorValue = result;
+        anchorTime = ev.time;
+      } else {
+        if (ev.type === "linearRamp") {
+          const frac = (t - anchorTime) / (ev.time - anchorTime);
+          return anchorValue + (ev.value - anchorValue) * frac;
+        }
+        if (ev.type === "expRamp") {
+          const frac = (t - anchorTime) / (ev.time - anchorTime);
+          return anchorValue * Math.pow(ev.value / anchorValue, frac);
+        }
+        return result;
+      }
+    }
+
+    return result;
   };
+
+  const param = {
+    setValueAtTime: vi.fn((value: number, time: number) => {
+      events.push({ type: "setValue", value, time, order: order++ });
+    }),
+    linearRampToValueAtTime: vi.fn((value: number, time: number) => {
+      events.push({ type: "linearRamp", value, time, order: order++ });
+    }),
+    exponentialRampToValueAtTime: vi.fn((value: number, time: number) => {
+      if (value <= 0) {
+        throw new RangeError("exponentialRampToValueAtTime target must be > 0");
+      }
+      if (computeAt(getNow()) <= 0) {
+        throw new RangeError(
+          "exponentialRampToValueAtTime start value must be > 0",
+        );
+      }
+      events.push({ type: "expRamp", value, time, order: order++ });
+    }),
+    setTargetAtTime: vi.fn(
+      (value: number, time: number, timeConstant: number) => {
+        events.push({
+          type: "setTarget",
+          value,
+          time,
+          timeConstant,
+          order: order++,
+        });
+      },
+    ),
+    cancelScheduledValues: vi.fn((time: number) => {
+      events = events.filter((e) => e.time < time);
+    }),
+  } as unknown as MockParam;
+
+  Object.defineProperty(param, "value", {
+    get: () => (events.length === 0 ? baseValue : computeAt(getNow())),
+    set: (v: number) => {
+      baseValue = v;
+      events = [];
+    },
+    enumerable: true,
+    configurable: true,
+  });
 
   return param;
 }
@@ -40,14 +136,24 @@ class MockAudioNode {
 }
 
 class MockGainNode extends MockAudioNode {
-  public readonly gain: MockParam = createAudioParam(1);
+  public readonly gain: MockParam;
+  constructor(getNow: () => number) {
+    super();
+    this.gain = createAudioParam(1, getNow);
+  }
 }
 
 class MockBiquadFilterNode extends MockAudioNode {
   public type: BiquadFilterType = "peaking";
-  public readonly frequency: MockParam = createAudioParam(0);
-  public readonly gain: MockParam = createAudioParam(0);
-  public readonly Q: MockParam = createAudioParam(1);
+  public readonly frequency: MockParam;
+  public readonly gain: MockParam;
+  public readonly Q: MockParam;
+  constructor(getNow: () => number) {
+    super();
+    this.frequency = createAudioParam(0, getNow);
+    this.gain = createAudioParam(0, getNow);
+    this.Q = createAudioParam(1, getNow);
+  }
 }
 
 class MockAnalyserNode extends MockAudioNode {
@@ -75,13 +181,17 @@ class MockBufferSourceNode extends MockAudioNode {
   public buffer: AudioBuffer | null = null;
   public loop = false;
   public onended: (() => void) | null = null;
-  public readonly playbackRate: MockParam = createAudioParam(1);
+  public readonly playbackRate: MockParam;
   public readonly start = vi.fn(
     (_when?: number, _offset?: number) => undefined,
   );
   public readonly stop = vi.fn(() => {
     this.onended?.();
   });
+  constructor(getNow: () => number) {
+    super();
+    this.playbackRate = createAudioParam(1, getNow);
+  }
 }
 
 class MockTimeStretchNode extends MockAudioNode {}
@@ -158,7 +268,7 @@ export class MockAudioContext extends EventTarget {
   }
 
   public createGain(): GainNode {
-    const node = new MockGainNode();
+    const node = new MockGainNode(() => this.currentTime);
     this.createdGains.push(node);
     return node as unknown as GainNode;
   }
@@ -168,7 +278,7 @@ export class MockAudioContext extends EventTarget {
   }
 
   public createBiquadFilter(): BiquadFilterNode {
-    const node = new MockBiquadFilterNode();
+    const node = new MockBiquadFilterNode(() => this.currentTime);
     this.createdBiquadFilters.push(node);
     return node as unknown as BiquadFilterNode;
   }
@@ -180,7 +290,7 @@ export class MockAudioContext extends EventTarget {
   }
 
   public createBufferSource(): AudioBufferSourceNode {
-    const node = new MockBufferSourceNode();
+    const node = new MockBufferSourceNode(() => this.currentTime);
     this.createdBufferSources.push(node);
     return node as unknown as AudioBufferSourceNode;
   }
@@ -495,6 +605,32 @@ export function resetBrowserMocks(): void {
   audioMockState.pitchVendor = "standard";
   objectUrlCounter = 0;
   nativeHlsSupported = false;
+}
+
+/**
+ * Advance both vitest fake timers AND every live mock AudioContext clock in
+ * lockstep (T-31). Scheduling-sensitive code reads `ctx.currentTime` when a
+ * timer callback fires (fade finalization, HLS backoff) and AudioParam values
+ * are computed at `currentTime`, so the two clocks must move together. Requires
+ * fake timers to be active (`vi.useFakeTimers()`). Sub-steps so a callback that
+ * reads `currentTime` mid-advance sees a coherent value.
+ */
+export async function advanceAudioTime(ms: number): Promise<void> {
+  const STEP_MS = 25;
+  let remaining = ms;
+
+  while (remaining > 0) {
+    const step = Math.min(STEP_MS, remaining);
+
+    for (const ctx of MockAudioContext.instances) {
+      if (ctx.state !== "closed") {
+        ctx.currentTime += step / 1000;
+      }
+    }
+
+    await vi.advanceTimersByTimeAsync(step);
+    remaining -= step;
+  }
 }
 
 export function setAudioAutoLoadCanPlay(value: boolean): void {

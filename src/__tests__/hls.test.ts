@@ -241,19 +241,27 @@ describe("HLS", () => {
       const hls = await loadAndPlay(player);
       expect(player.state).toBe("playing");
 
-      // Retry 1 (1s), 2 (2s), 3 (4s): startLoad with exponential backoff.
+      // Retry 1 (1s), 2 (2s), 3 (4s): startLoad with exponential backoff. The
+      // boundary is asserted to the millisecond, so a regressed shorter or
+      // non-exponential backoff is caught — not merely the retry count.
       hls.emitError("networkError");
       expect(hls.startLoad).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(hls.startLoad).not.toHaveBeenCalled(); // 1s backoff not elapsed
+      await vi.advanceTimersByTimeAsync(1);
       expect(hls.startLoad).toHaveBeenCalledTimes(1);
 
       hls.emitError("networkError");
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(hls.startLoad).toHaveBeenCalledTimes(1); // 2s backoff not elapsed
+      await vi.advanceTimersByTimeAsync(1);
       expect(hls.startLoad).toHaveBeenCalledTimes(2);
 
       hls.emitError("networkError");
-      await vi.advanceTimersByTimeAsync(4000);
+      await vi.advanceTimersByTimeAsync(3999);
+      expect(hls.startLoad).toHaveBeenCalledTimes(2); // 4s backoff not elapsed
+      await vi.advanceTimersByTimeAsync(1);
       expect(hls.startLoad).toHaveBeenCalledTimes(3);
 
       // Playback state untouched, no error yet.

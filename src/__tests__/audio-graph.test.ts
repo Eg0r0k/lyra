@@ -4,6 +4,10 @@
  *   `AudioContext`, gain/filter/analyser nodes, and a fake decoded buffer.
  * - `AudioGraph` is also tested directly so EQ and analyser behavior can be
  *   asserted without depending on Player orchestration for every branch.
+ * - Fade/volume value assertions advance the shared audio clock via
+ *   `advanceAudioTime` (T-31): AudioParam values are computed from the
+ *   automation timeline at `ctx.currentTime`, so the tests read real ramped
+ *   values instead of mirroring which mock method was called.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -11,9 +15,8 @@ import { AudioGraph } from "../audio/AudioGraph";
 import { Player } from "../index";
 import {
   MockAudioContext,
-  MockAudioElement,
+  advanceAudioTime,
   createArrayBuffer,
-  getLatestBufferSourceNode,
   getLatestAudioElement,
   getLatestAudioContext,
   getLatestGainNode,
@@ -110,25 +113,69 @@ describe("AudioGraph", () => {
     expect(timeDomainData[0]).toBe(128);
   });
 
-  it("finalizes fade gain so later fades do not start from stale AudioParam value", async () => {
+  it("ramps the fade gain over time and finalizes it at the target (T-31 real clock)", async () => {
     vi.useFakeTimers();
-    const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
-    // fadeTo drives the fade gain (second-to-last created), not the volume gain.
-    const fadeGain = getFadeGainNode() as unknown as {
-      gain: { value: number; setValueAtTime: Mock };
-    };
+    try {
+      const graph = new AudioGraph(
+        new MockAudioContext() as unknown as AudioContext,
+      );
+      const fadeGain = getFadeGainNode() as unknown as {
+        gain: { value: number };
+      };
 
-    const fadePromise = graph.fadeTo(0.4, 0.1);
+      const fadePromise = graph.fadeTo(0.4, 0.1);
 
-    await vi.advanceTimersByTimeAsync(180);
-    await fadePromise;
+      // Mid-flight the exponential ramp (1 -> 0.4) is genuinely between the
+      // endpoints. The old instant mock jumped to 0.4 on the ramp call, so this
+      // strictly-between assertion would have failed then — it is now real.
+      await advanceAudioTime(60);
+      const mid = fadeGain.gain.value;
+      expect(mid).toBeLessThan(1);
+      expect(mid).toBeGreaterThan(0.4);
 
-    // Bug guarded: the completion timer pins the fade gain to its final value so
-    // a later fade doesn't start from a stale ramping AudioParam value.
-    expect(fadeGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 0);
-    expect(fadeGain.gain.value).toBe(0.4);
+      await advanceAudioTime(200);
+      await fadePromise;
 
-    vi.useRealTimers();
+      // The completion timer pins the fade gain to its final value so a later
+      // fade starts from a settled param, not a stale mid-ramp value. Reverting
+      // AudioGraph's finalizing setValueAtTime leaves this at the ramp's SILENCE
+      // asymptote / stale value and fails here.
+      expect(fadeGain.gain.value).toBeCloseTo(0.4, 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ramps a fade to silence through the SILENCE_GAIN floor and lands at 0 (guards the exponential-ramp floor)", async () => {
+    vi.useFakeTimers();
+    try {
+      // If AudioGraph.fadeTo ramped to a raw 0 instead of SILENCE_GAIN, the
+      // scheduling mock throws (exponentialRampToValueAtTime target must be > 0)
+      // at schedule time, so this call would throw synchronously.
+      const graph = new AudioGraph(
+        new MockAudioContext() as unknown as AudioContext,
+      );
+      const fadeGain = getFadeGainNode() as unknown as {
+        gain: { value: number };
+      };
+
+      const fadePromise = graph.fadeTo(0, 0.1);
+
+      // The exponential ramp never reaches 0 mid-flight (that is the whole point
+      // of the SILENCE_GAIN floor) — value stays strictly positive.
+      await advanceAudioTime(60);
+      const mid = fadeGain.gain.value;
+      expect(mid).toBeGreaterThan(0);
+      expect(mid).toBeLessThan(1);
+
+      await advanceAudioTime(200);
+      await fadePromise;
+
+      // Completion pins exactly 0.
+      expect(fadeGain.gain.value).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not make HTML5 playback quieter after repeated fade out and fade in cycles", async () => {
@@ -155,95 +202,123 @@ describe("AudioGraph", () => {
 
   it("restores fade gain and keeps volume independent when a fade is cancelled mid-flight", async () => {
     vi.useFakeTimers();
-    const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
-    const volumeGain = getLatestGainNode() as unknown as {
-      gain: { value: number };
-    };
-    const fadeGain = getFadeGainNode() as unknown as {
-      gain: { value: number; setValueAtTime: Mock };
-    };
+    try {
+      const graph = new AudioGraph(
+        new MockAudioContext() as unknown as AudioContext,
+      );
+      const volumeGain = getLatestGainNode() as unknown as {
+        gain: { value: number };
+      };
+      const fadeGain = getFadeGainNode() as unknown as {
+        gain: { value: number };
+      };
 
-    graph.setVolumeImmediate(0.5);
-    expect(volumeGain.gain.value).toBe(0.5);
+      graph.setVolumeImmediate(0.5);
+      expect(volumeGain.gain.value).toBe(0.5);
 
-    void graph.fadeTo(0.8, 1);
-    await vi.advanceTimersByTimeAsync(300);
-    graph.cancelFade();
+      void graph.fadeTo(0.8, 1);
+      await advanceAudioTime(300);
 
-    // Cancel-restore bug guarded: cancelFade pins the fade gain to its pre-fade
-    // value (1) instead of leaving a stale ramp. Volume (0.5) is untouched by the
-    // fade/cancel — the F-13 independence fix.
-    expect(fadeGain.gain.setValueAtTime).toHaveBeenLastCalledWith(1, expect.any(Number));
-    expect(fadeGain.gain.value).toBe(1);
-    expect(volumeGain.gain.value).toBe(0.5);
+      // Genuinely mid-ramp (1 -> 0.8): only true with the scheduling mock.
+      const mid = fadeGain.gain.value;
+      expect(mid).toBeLessThan(1);
+      expect(mid).toBeGreaterThan(0.8);
 
-    vi.useRealTimers();
+      graph.cancelFade();
+
+      // cancelFade pins the fade gain to its pre-fade value (1); volume (0.5) is
+      // untouched by the fade/cancel — the F-13 independence fix.
+      expect(fadeGain.gain.value).toBe(1);
+      expect(volumeGain.gain.value).toBe(0.5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("maintains consistent volume across rapid fade cancellations", async () => {
     vi.useFakeTimers();
-    player = new Player({ mode: "html5", volume: 0.8 });
+    try {
+      player = new Player({ mode: "html5", volume: 0.8 });
 
-    await player.load("https://cdn.example.com/song.mp3");
+      await player.load("https://cdn.example.com/song.mp3");
 
-    await player.play();
+      await player.play();
 
-    for (let i = 0; i < 5; i++) {
-      void player.fadeOut(0.5);
-      await vi.advanceTimersByTimeAsync(100);
-      player.cancelFade();
+      for (let i = 0; i < 5; i++) {
+        void player.fadeOut(0.5);
+        await advanceAudioTime(100);
+        player.cancelFade();
+      }
+
+      const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+      const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
+
+      expect(fadeGain.gain.value).toBe(1);
+      expect(volumeGain.gain.value).toBe(0.8);
+      expect(getLatestAudioElement().volume).toBe(1);
+    } finally {
+      vi.useRealTimers();
     }
-
-    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
-    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
-
-    expect(fadeGain.gain.value).toBe(1);
-    expect(volumeGain.gain.value).toBe(0.8);
-    expect(getLatestAudioElement().volume).toBe(1);
-
-    vi.useRealTimers();
   });
 
-  it("applies HTML5 volume via the graph (element pinned) before play starts", async () => {
-    const playSpy = vi.spyOn(MockAudioElement.prototype, "play");
+  it("applies HTML5 volume via the graph (element pinned)", async () => {
     player = new Player({ mode: "html5", autoplay: true, volume: 0.2 });
 
     await player.load("https://cdn.example.com/song.mp3");
 
-    // T-10 (F-11): routed html5 applies user volume to the graph volume gain, not
-    // the element (which iOS ignores). The element is pinned to unity.
-    const volumeGain = getLatestGainNode() as unknown as {
-      gain: { setValueAtTime: Mock; setTargetAtTime: Mock };
-    };
+    // T-10 (F-11): routed html5 applies user volume to the graph volume gain
+    // immediately (setValueAtTime, so the value is settled at t=0) and pins the
+    // element to unity — iOS ignores element.volume. Asserted on the resulting
+    // param value rather than on spy call order (T-31: real value, not mirror).
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
 
-    expect(volumeGain.gain.setValueAtTime).toHaveBeenCalledWith(0.2, 0);
-    expect(volumeGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
-      playSpy.mock.invocationCallOrder[0],
-    );
+    expect(volumeGain.gain.value).toBe(0.2);
     expect(getLatestAudioElement().volume).toBe(1);
-
-    playSpy.mockRestore();
   });
 
-  it("applies initial graph volume immediately for webaudio autoplay before buffer start", async () => {
+  it("applies initial graph volume immediately for webaudio autoplay", async () => {
     player = new Player({ mode: "webaudio", autoplay: true, volume: 0.2 });
 
     await player.load({ data: createArrayBuffer() });
 
-    const outputGain = getLatestGainNode() as unknown as {
-      gain: {
-        setValueAtTime: ReturnType<typeof vi.fn>;
-        setTargetAtTime: ReturnType<typeof vi.fn>;
-      };
-    };
-    const bufferSource = getLatestBufferSourceNode() as unknown as {
-      start: ReturnType<typeof vi.fn>;
-    };
+    // Volume is applied to the graph volume gain up front (setValueAtTime), so
+    // the buffer starts already at the right level — asserted on the value.
+    const outputGain = getLatestGainNode() as unknown as { gain: { value: number } };
 
-    expect(outputGain.gain.setValueAtTime).toHaveBeenCalledWith(0.2, 0);
-    expect(outputGain.gain.setValueAtTime.mock.invocationCallOrder[0]).toBeLessThan(
-      bufferSource.start.mock.invocationCallOrder[0],
-    );
+    expect(outputGain.gain.value).toBe(0.2);
+  });
+
+  it("drives the graph volume gain toward the (clamped) target smoothly, not instantly (T-31)", async () => {
+    vi.useFakeTimers();
+    try {
+      player = new Player({ mode: "html5", volume: 1 });
+      await player.load("https://cdn.example.com/song.mp3");
+
+      const volumeGain = getLatestGainNode() as unknown as {
+        gain: { value: number };
+      };
+
+      // setVolume uses setTargetAtTime (smoothed): immediately after the call the
+      // gain is still at the old value — smoothing is not instantaneous.
+      player.setVolume(0.2);
+      expect(volumeGain.gain.value).toBeGreaterThan(0.5);
+
+      await advanceAudioTime(150);
+      expect(volumeGain.gain.value).toBeCloseTo(0.2, 2);
+
+      // Clamped targets land on the graph gain too (1.5 -> 1, -0.2 -> 0).
+      player.setVolume(1.5);
+      await advanceAudioTime(150);
+      expect(player.volume).toBe(1);
+      expect(volumeGain.gain.value).toBeCloseTo(1, 2);
+
+      player.setVolume(-0.2);
+      await advanceAudioTime(150);
+      expect(player.volume).toBe(0);
+      expect(volumeGain.gain.value).toBeCloseTo(0, 2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("routes the second loaded track's own gain node into the shared graph (regression)", async () => {
@@ -304,10 +379,17 @@ describe("AudioGraph", () => {
     expect(volumeGain.gain.value).toBe(0.6);
     expect(fadeGain.gain.value).toBeCloseTo(0.3);
 
-    // setVolume behaves independently of the active fade multiplier.
-    player.setVolume(0.4);
-    expect(volumeGain.gain.value).toBe(0.4);
-    expect(fadeGain.gain.value).toBeCloseTo(0.3);
+    vi.useFakeTimers();
+    try {
+      // setVolume behaves independently of the active fade multiplier: it drives
+      // the volume gain (smoothed) and never touches the fade gain.
+      player.setVolume(0.4);
+      await advanceAudioTime(150);
+      expect(volumeGain.gain.value).toBeCloseTo(0.4, 2);
+      expect(fadeGain.gain.value).toBeCloseTo(0.3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fadeOutAndPause resets the fade gain to 1 without touching volume", async () => {
@@ -341,18 +423,24 @@ describe("AudioGraph", () => {
     expect(player.fadeMultiplier).toBe(0);
     expect(fadeGain.gain.value).toBe(0);
 
-    // Raising volume moves volumeGain and player.volume, but effective output
-    // (fade x volume) stays silent — the mirror of the F-13 class.
-    player.setVolume(0.8);
-    expect(player.volume).toBe(0.8);
-    expect(volumeGain.gain.value).toBe(0.8);
-    expect(fadeGain.gain.value).toBe(0);
-    expect(player.fadeMultiplier).toBe(0);
+    vi.useFakeTimers();
+    try {
+      // Raising volume moves volumeGain (smoothed) and player.volume, but the
+      // effective output (fade × volume) stays silent — the mirror of F-13.
+      player.setVolume(0.8);
+      await advanceAudioTime(150);
+      expect(player.volume).toBe(0.8);
+      expect(volumeGain.gain.value).toBeCloseTo(0.8, 2);
+      expect(fadeGain.gain.value).toBe(0);
+      expect(player.fadeMultiplier).toBe(0);
 
-    // fadeIn is the documented recovery: it ramps the multiplier back to full.
-    await player.fadeIn(0);
-    expect(player.fadeMultiplier).toBe(1);
-    expect(fadeGain.gain.value).toBe(1);
+      // fadeIn is the documented recovery: it ramps the multiplier back to full.
+      await player.fadeIn(0);
+      expect(player.fadeMultiplier).toBe(1);
+      expect(fadeGain.gain.value).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("un-routed html5 (webAudioRouting:'never') applies volume to the element", async () => {

@@ -17,6 +17,7 @@ import { PlayerErrorCode } from "../types/events";
 import type { ISourceHandler } from "../source/ISourceHandler";
 import { playerLogger } from "../utils/Logger";
 import {
+  advanceAudioTime,
   MockAudioContext,
   MockAudioElement,
   MockMediaError,
@@ -26,7 +27,6 @@ import {
   fetchMock,
   getLatestAudioContext,
   getLatestAudioElement,
-  getLatestGainNode,
   getLatestBufferSourceNode,
   mockFetchSuccess,
   setAudioAutoLoadCanPlay,
@@ -427,21 +427,20 @@ describe("Player", () => {
 
       await player.load("https://cdn.example.com/song.mp3");
 
-      // Routed html5 (default): user volume/mute live on the graph volume gain;
-      // the element is pinned to unity (T-10 / F-11).
+      // Routed html5 (default): user volume/mute live on the graph volume gain
+      // (smoothed) and the element is pinned to unity (T-10 / F-11). Clamping is
+      // asserted here on player.volume; that the smoothed graph gain reaches the
+      // clamped target is covered by audio-graph.test.ts under a real clock.
       player.setVolume(1.5);
       expect(player.volume).toBe(1);
-      expect(getLatestGainNode().gain.value).toBe(1);
       expect(getLatestAudioElement().volume).toBe(1);
 
       player.setVolume(-0.2);
       expect(player.volume).toBe(0);
-      expect(getLatestGainNode().gain.value).toBe(0);
       expect(getLatestAudioElement().volume).toBe(1);
 
       player.setMuted(true);
       expect(player.muted).toBe(true);
-      expect(getLatestGainNode().gain.value).toBe(0);
       expect(getLatestAudioElement().muted).toBe(false);
 
       player.toggleMute();
@@ -1305,6 +1304,25 @@ describe("Player", () => {
 
         await vi.advanceTimersByTimeAsync(500);
         expect(tu.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("webaudio currentTime advances with the audio clock (T-31 real clock)", async () => {
+      vi.useFakeTimers();
+      try {
+        const player = trackPlayer(new Player({ mode: "webaudio" }));
+        await player.load({ data: createArrayBuffer() });
+        await player.play();
+
+        // getCurrentTime derives from ctx.currentTime; the mock clock is frozen
+        // until advanced, so this verifies real position math (the old frozen
+        // mock left currentTime at 0 forever and could not test this).
+        expect(player.currentTime).toBeCloseTo(0, 5);
+
+        await advanceAudioTime(2000);
+        expect(player.currentTime).toBeCloseTo(2, 1);
       } finally {
         vi.useRealTimers();
       }
