@@ -80,7 +80,7 @@ class MockBufferSourceNode extends MockAudioNode {
   });
 }
 
-export class MockAudioContext {
+export class MockAudioContext extends EventTarget {
   public static instances: MockAudioContext[] = [];
   public static decodeError: unknown = null;
   public static decodedDuration = 120;
@@ -90,6 +90,16 @@ export class MockAudioContext {
    * superseding load to exercise stale-rejection handling.
    */
   public static nextDecodeDeferred: Promise<AudioBuffer> | null = null;
+  /**
+   * When set, resume() rejects with this value and leaves the state unchanged.
+   * Exercises the auto-resume rejection path (F-17).
+   */
+  public static resumeError: unknown = null;
+  /**
+   * When true, resume() resolves but does NOT flip the state to "running",
+   * simulating a context that stays suspended forever (F-16).
+   */
+  public static resumeKeepsState = false;
 
   public state: AudioContextState = "running";
   public currentTime = 0;
@@ -101,15 +111,15 @@ export class MockAudioContext {
   public readonly createdBufferSources: MockBufferSourceNode[] = [];
 
   constructor(_options?: AudioContextOptions) {
+    super();
     MockAudioContext.instances.push(this);
   }
 
   public setState(newState: AudioContextState): void {
     this.state = newState;
-    this.onstatechange?.call(
-      this as unknown as AudioContext,
-      new Event("statechange"),
-    );
+    const event = new Event("statechange");
+    this.onstatechange?.call(this as unknown as AudioContext, event);
+    this.dispatchEvent(event);
   }
 
   public createGain(): GainNode {
@@ -138,6 +148,19 @@ export class MockAudioContext {
     return node as unknown as AudioBufferSourceNode;
   }
 
+  public createBuffer(
+    numberOfChannels: number,
+    length: number,
+    sampleRate: number,
+  ): AudioBuffer {
+    return {
+      numberOfChannels,
+      length,
+      sampleRate,
+      duration: length / sampleRate,
+    } as unknown as AudioBuffer;
+  }
+
   public async decodeAudioData(
     _arrayBuffer: ArrayBuffer,
   ): Promise<AudioBuffer> {
@@ -157,7 +180,13 @@ export class MockAudioContext {
   }
 
   public async resume(): Promise<void> {
-    this.state = "running";
+    if (MockAudioContext.resumeError) {
+      throw MockAudioContext.resumeError;
+    }
+    if (MockAudioContext.resumeKeepsState) {
+      return;
+    }
+    this.setState("running");
   }
 
   public async close(): Promise<void> {
@@ -169,6 +198,8 @@ export class MockAudioContext {
     MockAudioContext.decodeError = null;
     MockAudioContext.decodedDuration = 120;
     MockAudioContext.nextDecodeDeferred = null;
+    MockAudioContext.resumeError = null;
+    MockAudioContext.resumeKeepsState = false;
   }
 }
 

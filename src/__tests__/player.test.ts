@@ -21,6 +21,7 @@ import {
   createArrayBuffer,
   createDeferred,
   fetchMock,
+  getLatestAudioContext,
   getLatestAudioElement,
   getLatestGainNode,
   mockFetchSuccess,
@@ -842,6 +843,95 @@ describe("Player", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("unlockAudio + context auto-resume (T-11)", () => {
+    it("resolves on a running context", async () => {
+      const player = trackPlayer(Player.auto());
+
+      await expect(player.unlockAudio()).resolves.toBeUndefined();
+
+      const ctx = getLatestAudioContext();
+      expect(ctx.createdBufferSources).toHaveLength(1);
+    });
+
+    it("rejects on a stuck-suspended context and releases the latch", async () => {
+      vi.useFakeTimers();
+      try {
+        const player = trackPlayer(Player.auto());
+
+        // Force the context to stay suspended: resume() never flips state.
+        // Accessing `.audioContext` creates the context (running); suspend it.
+        const ctx = player.audioContext as unknown as MockAudioContext;
+        ctx.setState("suspended");
+        MockAudioContext.resumeKeepsState = true;
+
+        const first = player.unlockAudio();
+        const rejection = expect(first).rejects.toMatchObject({
+          code: PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
+        });
+        await vi.advanceTimersByTimeAsync(2_000);
+        await rejection;
+
+        // Latch released → a later call retries. Let resume succeed now.
+        MockAudioContext.resumeKeepsState = false;
+        await expect(player.unlockAudio()).resolves.toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("contains a rejected auto-resume in the interrupted→suspended path", async () => {
+      const player = trackPlayer(Player.auto());
+
+      // Create the context (running) and install the statechange handler.
+      const ctx = player.audioContext as unknown as MockAudioContext;
+
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        MockAudioContext.resumeError = new Error("resume blocked (no gesture)");
+
+        ctx.setState("interrupted");
+        ctx.setState("suspended"); // triggers auto-resume → resume() rejects
+
+        // Node reports unhandled rejections on a macrotask boundary, which
+        // fake timers do not trigger — a real macrotask flush is the only way
+        // to observe (the absence of) the process-level event. Executor form
+        // is used because the repo's ES2020 lib predates Promise.withResolvers.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+        expect(unhandled).toHaveLength(0);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        MockAudioContext.resumeError = null;
+      }
+    });
+
+    it("unlock state resets after context recreation", async () => {
+      const player = trackPlayer(Player.auto());
+
+      await player.unlockAudio();
+      const first = getLatestAudioContext();
+
+      // Closing the context forces getAudioContext() to recreate it.
+      first.setState("closed");
+      await player.getAudioContext();
+
+      const recreated = getLatestAudioContext();
+      expect(recreated).not.toBe(first);
+      expect(recreated.createdBufferSources).toHaveLength(0);
+
+      // Latch was cleared on recreation → unlockAudio runs again.
+      await player.unlockAudio();
+      expect(recreated.createdBufferSources).toHaveLength(1);
     });
   });
 });

@@ -62,6 +62,8 @@ function inferLoadErrorCode(error: unknown): PlayerErrorCode {
   return PlayerErrorCode.UNKNOWN;
 }
 
+const UNLOCK_TIMEOUT_MS = 2_000;
+
 type ResolvedPlayerOptions = Required<
   Omit<PlayerOptions, "Hls" | "loudnessNormalization">
 > & {
@@ -206,7 +208,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
             "AudioContext interrupted → suspended, auto-resuming",
           );
 
-          void this.unfreezeAudioContext();
+          void this.unfreezeAudioContext().catch((err) => {
+            playerLogger.debug("Auto-resume after interruption failed", err);
+          });
         }
 
         if (
@@ -228,6 +232,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     if (ctx.state === "closed") {
       this._ctx = null;
+      this._isAudioUnlocked = false;
       return this.audioContext;
     }
 
@@ -287,39 +292,71 @@ export class Player extends EventEmitter<PlayerEventMap> {
       const ctx = await this.getAudioContext();
 
       await new Promise<void>((resolve, reject) => {
-        const placeholder = ctx.createBuffer(1, 1, 22050);
-
+        let settled = false;
         let source: AudioBufferSourceNode | null = ctx.createBufferSource();
+        let timer: number | null = null;
 
-        source.buffer = placeholder;
-        source.connect(ctx.destination);
+        const onStateChange = (): void => {
+          if (ctx.state === "running") {
+            finish(true);
+          }
+        };
 
-        source.onended = () => {
-          source?.disconnect();
-          if (source) {
-            source.buffer = null;
+        const finish = (unlocked: boolean, err?: unknown): void => {
+          if (settled) return;
+          settled = true;
+
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
           }
 
-          source = null;
+          ctx.removeEventListener("statechange", onStateChange);
 
-          this._isAudioUnlocked = true;
-          this._isAudioUnlocking = false;
+          if (source) {
+            source.onended = null;
+            source.disconnect();
+            source.buffer = null;
+            source = null;
+          }
 
-          resolve();
+          if (unlocked) {
+            this._isAudioUnlocked = true;
+            resolve();
+          } else {
+            reject(err);
+          }
         };
+
+        source.buffer = ctx.createBuffer(1, 1, 22050);
+        source.connect(ctx.destination);
+        source.onended = () => finish(true);
+
+        ctx.addEventListener("statechange", onStateChange);
+
+        timer = setTimeout(() => {
+          finish(
+            false,
+            new PlayerError(
+              "Audio unlock timed out; user gesture may be required.",
+              PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
+            ),
+          );
+        }, UNLOCK_TIMEOUT_MS) as unknown as number;
 
         try {
           source.start(0);
         } catch (err) {
-          source.disconnect();
-          source = null;
+          finish(false, err);
+          return;
+        }
 
-          reject(err);
+        if (ctx.state === "running") {
+          finish(true);
         }
       });
-    } catch (err) {
+    } finally {
       this._isAudioUnlocking = false;
-      throw err;
     }
   }
 
@@ -972,6 +1009,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
 
     this._ctx = null;
+    this._isAudioUnlocked = false;
 
     this._audioGraph?.dispose();
     this._audioGraph = null;
