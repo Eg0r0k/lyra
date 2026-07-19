@@ -826,6 +826,30 @@ Priority: P1 · Type: docs · Breaking: no · Score: M · Depends on: T-02, T-03
 
 ---
 
+### [ ] T-27 — Independent gain / pre-amp channel — POSTPONED
+
+Priority: P3 · Type: feature · Breaking: no (additive) · Score: M · Depends on: T-10 · Closes findings: none (new capability)
+
+**Status. POSTPONED** — implement after a major release, NOT in this pass. Recorded so the current gain architecture is not accidentally re-litigated.
+
+**Problem.** There is no first-class way to apply gain above unity (pre-amp) or an independent per-track trim.
+
+**Current architecture (do not re-discover).**
+- `player.volume` is clamped to `[0, 1]` by a **double clamp**: the `Volume` brand (`Math.max(0, Math.min(1, v))`, `branded.ts`) AND `AudioGraph.setVolume`/`setVolumeImmediate` (same clamp). Gain above unity is unavailable through the volume path.
+- The graph (T-10) has exactly three owned gain channels: `_volumeGain` (user volume, 0..1), `_outputGain` (fade multiplier, 0..1), `_normalizationGain` (loudness). `_inputGain` is a fixed unity input node with no setter. No public raw-gain / trim surface exists.
+- The **only** node that can exceed unity is `_normalizationGain` — `setNormalizationGainDb` uses `Math.max(0, dbToGain(db))` with **no upper clamp**. Using it as a pre-amp is a **hack**: (a) `recomputeNormalization()` overwrites the manual dB on **every `load()`** (and on any normalization setter / metadata change), so it does not persist; (b) it **bypasses** `preventClipping` / `headroomDb` / `maxGainDb` (those gate only the *computed* value, not a manual `setNormalizationGainDb`); (c) it hijacks the loudness channel's semantics.
+
+**Open design questions (resolve before implementing).**
+- Chain placement: where does the gain sit relative to normalization, EQ, fade, and the T-10 volume node?
+- Units: dB or linear API?
+- Clipping protection: does headroom / a limiter apply to this channel, or is it the caller's responsibility?
+- Persistence: a **pre-amp** should survive across loads; a **per-track trim** should reset on `load()` — one option with a flag, or two distinct APIs?
+- Public surface: new `Player` method(s) + option vs. an `AudioGraph` method; interaction with the T-10 single-volume-ownership rule.
+
+**Don't do (this pass).** No implementation. No README mention (T-25) — there is no feature yet.
+
+---
+
 ### Finding coverage check
 
 F-01→T-03, F-02/F-03→T-04, F-04/F-06→T-02, F-05/F-09→T-01/T-09, F-07→T-05, F-08→T-15, F-10→T-08, F-11/F-12/F-13→T-10 (F-12 timer throttling itself: risk accepted — the ramp is audio-thread-scheduled so the late pause is inaudible; a worklet-based completion clock is not worth the complexity), F-14→T-13, F-15→T-14, F-16/F-17→T-11, F-18→T-12, F-19/F-20→T-16, F-21→T-17, F-22/F-28→T-18, F-23→T-19, F-24→T-20 (deferred per amendments.md — F-24 risk accepted for this pass), F-25→T-21, F-26/F-31/F-33→T-22a, F-27→T-22b, F-29→T-07, F-30→T-25, F-32→T-23/T-24, F-34/F-35→T-08 (author observations, FSM table lags reality; folded into T-08).
