@@ -630,9 +630,20 @@ Priority: P2 · Type: fix · Breaking: no · Score: M · Depends on: T-01 · Clo
 
 ---
 
-### [ ] T-19 — Injectable / shared AudioContext
+### [ ] T-19 — Injectable / shared AudioContext — AS BUILT
 
 Priority: P2 · Type: feature · Breaking: no · Score: S · Depends on: T-11 · Closes findings: F-23
+
+> **AS-BUILT improvement (approved in-session): NO onstatechange takeover.**
+> The player now registers its statechange handler via
+> `addEventListener("statechange", …)` (not by assigning the `onstatechange`
+> property), so a handler the caller already set on an injected context is
+> **preserved** — both fire. This voids step 1's "document that the player takes
+> over onstatechange", the Don't-do "don't multiplex onstatechange" concern
+> (no multiplexing code — the EventTarget dispatches to all listeners), and the
+> Risk's "documented limitation". Handler stored as a stable field, removed on
+> dispose. Verified by a test asserting the consumer's `onstatechange` still
+> fires after injection.
 
 **Problem.** One context per Player; multi-player apps hit iOS context limits and can't share a context/unlock state.
 

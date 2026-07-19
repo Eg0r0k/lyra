@@ -94,6 +94,14 @@ export interface HLSConfig {
 export interface PlayerOptions {
   mode?: PlaybackMode;
   latencyHint?: AudioContextLatencyCategory | number;
+  /**
+   * Inject an existing {@link AudioContext} to share across players (e.g. to
+   * stay under iOS context limits or reuse unlock state). When provided, the
+   * player uses it as-is (`latencyHint` is ignored) and NEVER closes it on
+   * `dispose()` — the caller owns its lifecycle. A closed injected context
+   * throws `PLAYBACK_FAILED` on first use.
+   */
+  audioContext?: AudioContext;
   volume?: number;
   muted?: boolean;
   loop?: boolean;
@@ -142,11 +150,15 @@ export interface LoadOptions {
 }
 
 export type ResolvedPlayerOptions = Required<
-  Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "hlsConfig">
+  Omit<
+    PlayerOptions,
+    "Hls" | "loudnessNormalization" | "hlsConfig" | "audioContext"
+  >
 > & {
   hlsConfig: Required<HLSConfig> & Record<string, unknown>;
   loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
+  audioContext?: AudioContext;
 };
 
 export const DEFAULT_OPTIONS: ResolvedPlayerOptions = {

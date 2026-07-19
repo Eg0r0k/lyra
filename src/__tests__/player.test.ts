@@ -949,6 +949,11 @@ describe("Player", () => {
         ctx.setState("suspended");
         MockAudioContext.resumeKeepsState = true;
 
+        // Baseline = the player's own persistent statechange listener (T-19,
+        // registered via addEventListener). unlockAudio's transient listeners
+        // must not accumulate on top of it.
+        const baseline = ctx.statechangeListenerCount;
+
         for (let i = 0; i < 3; i++) {
           const attempt = player.unlockAudio();
           const rejection = expect(attempt).rejects.toMatchObject({
@@ -958,8 +963,8 @@ describe("Player", () => {
           await rejection;
         }
 
-        // Every settle path (incl. timeout) removes its statechange listener.
-        expect(ctx.statechangeListenerCount).toBe(0);
+        // Every settle path (incl. timeout) removes its transient listener.
+        expect(ctx.statechangeListenerCount).toBe(baseline);
       } finally {
         vi.useRealTimers();
       }
@@ -1301,6 +1306,99 @@ describe("Player", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("injectable AudioContext (T-19)", () => {
+    it("does not close an injected context on dispose (F-23)", async () => {
+      const ctx = new MockAudioContext();
+      const player = new Player({
+        mode: "webaudio",
+        audioContext: ctx as unknown as AudioContext,
+      });
+
+      await player.load({ data: createArrayBuffer() });
+      await player.dispose();
+
+      expect(ctx.state).not.toBe("closed"); // caller owns it
+    });
+
+    it("closes an owned context on dispose (regression)", async () => {
+      const player = new Player({ mode: "webaudio" });
+      await player.load({ data: createArrayBuffer() });
+
+      const ctx = getLatestAudioContext();
+      await player.dispose();
+
+      expect(ctx.state).toBe("closed");
+    });
+
+    it("two players share one injected context; disposing one leaves it open", async () => {
+      const ctx = new MockAudioContext();
+      const a = new Player({
+        mode: "webaudio",
+        audioContext: ctx as unknown as AudioContext,
+      });
+      const b = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          audioContext: ctx as unknown as AudioContext,
+        }),
+      );
+
+      await a.load({ data: createArrayBuffer() });
+      await b.load({ data: createArrayBuffer() });
+      await a.dispose();
+
+      expect(ctx.state).not.toBe("closed");
+      // b still works on the shared context.
+      await b.play();
+      expect(b.isPlaying).toBe(true);
+    });
+
+    it("throws PLAYBACK_FAILED when the injected context is already closed", async () => {
+      const ctx = new MockAudioContext();
+      await ctx.close();
+      const player = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          audioContext: ctx as unknown as AudioContext,
+        }),
+      );
+
+      const read = () => player.audioContext;
+      let caught: { code?: PlayerErrorCode } | undefined;
+      try {
+        read();
+      } catch (e) {
+        caught = e as { code?: PlayerErrorCode };
+      }
+      expect(caught?.code).toBe(PlayerErrorCode.PLAYBACK_FAILED);
+    });
+
+    it("preserves a consumer's onstatechange on an injected context (T-19 positive)", async () => {
+      const ctx = new MockAudioContext();
+      const consumerHandler = vi.fn();
+      ctx.onstatechange = consumerHandler as unknown as typeof ctx.onstatechange;
+
+      const player = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          audioContext: ctx as unknown as AudioContext,
+        }),
+      );
+      await player.load({ data: createArrayBuffer() });
+
+      const resumed = vi.fn();
+      player.on("contextresumed", resumed);
+
+      // The player observes statechange via addEventListener; the consumer's
+      // own onstatechange is NOT clobbered — both fire.
+      ctx.setState("suspended");
+      ctx.setState("running");
+
+      expect(consumerHandler).toHaveBeenCalled();
+      expect(resumed).toHaveBeenCalled();
     });
   });
 });

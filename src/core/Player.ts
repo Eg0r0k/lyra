@@ -65,14 +65,17 @@ function inferLoadErrorCode(error: unknown): PlayerErrorCode {
 const UNLOCK_TIMEOUT_MS = 2_000;
 
 type ResolvedPlayerOptions = Required<
-  Omit<PlayerOptions, "Hls" | "loudnessNormalization">
+  Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "audioContext">
 > & {
   loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
+  audioContext?: AudioContext;
 };
 
 export class Player extends EventEmitter<PlayerEventMap> {
   private _ctx: AudioContext | null = null;
+  /** False when the AudioContext was injected (caller-owned) — never closed on dispose. */
+  private _ownsContext = true;
   private _stateManager: StateManager;
   private _sourceManager: SourceManager;
   private _audioGraph: AudioGraph | null = null;
@@ -99,6 +102,42 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private _isAudioUnlocking = false;
 
   private _previousCtxState: AudioContextState | null = null;
+
+  /**
+   * AudioContext statechange handler. Registered via addEventListener (not the
+   * onstatechange property) so it coexists with any handler the caller already
+   * set on an injected context (T-19) — no takeover, no documented limitation.
+   */
+  private _onStateChange = (): void => {
+    if (!this._ctx) return;
+
+    const state = this._ctx.state;
+    const prevState = this._previousCtxState;
+
+    this._previousCtxState = state;
+
+    if (state === "interrupted") {
+      playerLogger.debug("AudioContext interrupted");
+      this.emit("contextinterrupted");
+    }
+
+    if (state === "suspended" && prevState === "interrupted") {
+      playerLogger.debug("AudioContext interrupted → suspended, auto-resuming");
+
+      void this.unfreezeAudioContext().catch((err) => {
+        playerLogger.debug("Auto-resume after interruption failed", err);
+      });
+    }
+
+    if (
+      state === "running" &&
+      (prevState === "suspended" || prevState === "interrupted")
+    ) {
+      playerLogger.debug("AudioContext resumed");
+      this.emit("contextresumed");
+      this._resyncStrategyClock();
+    }
+  };
 
   constructor(options: PlayerOptions = {}) {
     super();
@@ -228,50 +267,33 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   get audioContext(): AudioContext {
     if (!this._ctx) {
-      const win = window as typeof window & {
-        webkitAudioContext?: typeof AudioContext;
-      };
-      const WebAudioCtx: typeof AudioContext =
-        window.AudioContext ?? win.webkitAudioContext;
+      const injected = this._options.audioContext;
 
-      this._ctx = new WebAudioCtx({
-        latencyHint: this._options.latencyHint,
-      });
+      if (injected) {
+        if (injected.state === "closed") {
+          throw new PlayerError(
+            "Injected AudioContext is closed",
+            PlayerErrorCode.PLAYBACK_FAILED,
+          );
+        }
+        this._ctx = injected;
+        this._ownsContext = false;
+        playerLogger.debug("Using injected AudioContext; latencyHint ignored");
+      } else {
+        const win = window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        };
+        const WebAudioCtx: typeof AudioContext =
+          window.AudioContext ?? win.webkitAudioContext;
+
+        this._ctx = new WebAudioCtx({
+          latencyHint: this._options.latencyHint,
+        });
+        this._ownsContext = true;
+      }
 
       this._previousCtxState = this._ctx.state;
-
-      this._ctx.onstatechange = () => {
-        if (!this._ctx) return;
-
-        const state = this._ctx.state;
-        const prevState = this._previousCtxState;
-
-        this._previousCtxState = state;
-
-        if (state === "interrupted") {
-          playerLogger.debug("AudioContext interrupted");
-          this.emit("contextinterrupted");
-        }
-
-        if (state === "suspended" && prevState === "interrupted") {
-          playerLogger.debug(
-            "AudioContext interrupted → suspended, auto-resuming",
-          );
-
-          void this.unfreezeAudioContext().catch((err) => {
-            playerLogger.debug("Auto-resume after interruption failed", err);
-          });
-        }
-
-        if (
-          state === "running" &&
-          (prevState === "suspended" || prevState === "interrupted")
-        ) {
-          playerLogger.debug("AudioContext resumed");
-          this.emit("contextresumed");
-          this._resyncStrategyClock();
-        }
-      };
+      this._ctx.addEventListener("statechange", this._onStateChange);
     }
 
     return this._ctx;
@@ -281,6 +303,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
     const ctx = this.audioContext;
 
     if (ctx.state === "closed") {
+      if (!this._ownsContext) {
+        throw new PlayerError(
+          "Injected AudioContext is closed",
+          PlayerErrorCode.PLAYBACK_FAILED,
+        );
+      }
+      // Owned context closed at runtime → recreate it.
+      ctx.removeEventListener("statechange", this._onStateChange);
       this._ctx = null;
       this._isAudioUnlocked = false;
       return this.audioContext;
@@ -1140,9 +1170,11 @@ export class Player extends EventEmitter<PlayerEventMap> {
     await this.cleanup();
 
     if (this._ctx) {
-      this._ctx.onstatechange = null;
+      this._ctx.removeEventListener("statechange", this._onStateChange);
 
-      if (this._ctx.state !== "closed") {
+      // Ownership: close only a context we created; an injected one belongs to
+      // the caller and must survive this player's dispose (T-19).
+      if (this._ownsContext && this._ctx.state !== "closed") {
         await this._ctx.close();
       }
     }
