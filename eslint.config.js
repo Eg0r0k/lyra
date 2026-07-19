@@ -35,6 +35,21 @@ export default tseslint.config(
       // A `let` read in a closure defined before its single assignment (e.g.
       // EventEmitter.waitFor's unsubscribe) genuinely needs `let`.
       "prefer-const": ["error", { ignoreReadBeforeAssign: true }],
+      // A static class FIELD WITH AN INITIALIZER lowers (ES2020 target) to a
+      // top-level `Class.X = …` assignment that esbuild treats as
+      // side-effectful, pinning the whole class against tree-shaking in the
+      // single-file dist (T-21). Use a module-level const. (Static methods and
+      // uninitialized static declarations — e.g. a singleton holder — don't
+      // lower, so they're not matched. The `pnpm size` DCE budget is the
+      // definitive backstop.)
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "PropertyDefinition[static=true][value]",
+          message:
+            "No initialized static class fields — they break dist tree-shaking under the ES2020 target (T-21). Use a module-level const.",
+        },
+      ],
     },
   },
 
@@ -52,6 +67,8 @@ export default tseslint.config(
       "@typescript-eslint/unbound-method": "off",
       "@typescript-eslint/only-throw-error": "off",
       "@typescript-eslint/no-unnecessary-type-assertion": "off",
+      // Test mocks use static fields freely — they never ship in dist.
+      "no-restricted-syntax": "off",
     },
   },
 
