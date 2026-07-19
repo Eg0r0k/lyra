@@ -715,7 +715,7 @@ The published ESM entry is about **20 KB gzipped**. The package sets `"sideEffec
 
 `Player`, `PlayerError`, `PlayerErrorCode`, `CancellationToken`, `CancellationError`, `AudioGraph`, `normalizeSource`, `DEFAULT_OPTIONS`, `createVolume`/`createTimeSeconds`/`createPlaybackRate`, and the types `PlayerOptions`, `LoadOptions`, `PlayerState`, `PlaybackMode`, `AudioFormat`, `AudioSourceType`, `AudioSource`, `AudioSourceInput`, `QualityLevel`, `HLSConfig`, `Volume`/`TimeSeconds`/`PlaybackRate`, `PlayerEventMap`, `PlayerEventName`, `TimeUpdatePayload`, `VolumeChangePayload`, `BufferPayload`, `ErrorPayload`, `ITimeStretchNode`, `TimeStretchFactory`.
 
-**Advanced / internal-ish exports** (for extension and testing; most apps only need `Player`): `EventEmitter`, `StateManager`, `HTML5Strategy`, `WebAudioStrategy`, `SourceManager`, `UrlHandler`, `BlobHandler`, `BufferHandler`, `HLSHandler`, `NativeHlsHandler`, and the types `IPlaybackStrategy`, `StrategyInitOptions`, `PlaybackStrategyEvents`, `ISourceHandler`, `PreparedSource`, `SourceCapabilities`.
+**Advanced / internal-ish exports** (for extension and testing; most apps only need `Player`): `EventEmitter`, `StateManager`, `HTML5Strategy`, `WebAudioStrategy`, `SourceManager`, `UrlHandler`, `BlobHandler`, `BufferHandler`, `HLSHandler`, `NativeHlsHandler`, and the types `IPlaybackStrategy`, `StrategyInitOptions`, `PlaybackStrategyEvents`, `ISourceHandler`, `PreparedSource`, `SourceCapabilities`, `SeekableRange`.
 
 ---
 

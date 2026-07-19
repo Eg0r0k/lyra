@@ -9,6 +9,7 @@ import {
 import {
   ISourceHandler,
   PreparedSource,
+  SeekableRange,
   SourceCapabilities,
 } from "../ISourceHandler";
 import { PlayerError, PlayerErrorCode } from "../../types/events";
@@ -57,6 +58,12 @@ export class HLSHandler implements ISourceHandler {
   private _isLive = false;
   /** Media element of the active load — source of the seekable range. */
   private _mediaElement: HTMLMediaElement | null = null;
+  /**
+   * Stable per-session capabilities object (T-30 / F-52). Built once, reused
+   * across getCapabilities() calls, and dropped on reset() — so the player can
+   * cache the reference and its live getters stay current.
+   */
+  private _capabilities: SourceCapabilities | null = null;
 
   // --- runtime recovery session state (F-07) ---
   /** Retained load signal so backoff retries abort with the load. */
@@ -258,26 +265,41 @@ export class HLSHandler implements ISourceHandler {
   getCapabilities(): SourceCapabilities | null {
     if (!this._hls) return null;
 
-    return {
-      qualityLevels: this._qualityLevels,
-      setQuality: (level: number) => {
-        if (this._hls) {
-          this._hls.currentLevel = level;
-        }
-      },
-      getCurrentQuality: () => this._hls?.currentLevel ?? -1,
-      isLive: this._isLive,
-      getSeekableRange: () => this.readSeekableRange(),
-      onQualityChange: (callback: (level: QualityLevel) => void) => {
-        this._onQualityChange = callback;
-      },
-      onRuntimeError: (callback: (error: PlayerError) => void) => {
-        this._onRuntimeError = callback;
-      },
-    };
+    // Build the stable object once and reuse it (T-30 / F-52): the player caches
+    // this reference and reads `isLive` on its timeupdate hot path. `isLive` and
+    // `qualityLevels` are live getters (arrow functions close over `this`, no
+    // this-alias) so the cached reference reflects LEVEL_LOADED/MANIFEST_PARSED
+    // updates. `ownsMediaErrors` makes the HTML5 element-error dedupe explicit.
+    if (!this._capabilities) {
+      const caps: SourceCapabilities = {
+        setQuality: (level: number) => {
+          if (this._hls) {
+            this._hls.currentLevel = level;
+          }
+        },
+        getCurrentQuality: () => this._hls?.currentLevel ?? -1,
+        getSeekableRange: () => this.readSeekableRange(),
+        onQualityChange: (callback: (level: QualityLevel) => void) => {
+          this._onQualityChange = callback;
+        },
+        onRuntimeError: (callback: (error: PlayerError) => void) => {
+          this._onRuntimeError = callback;
+        },
+        ownsMediaErrors: true,
+      };
+
+      Object.defineProperties(caps, {
+        qualityLevels: { enumerable: true, get: () => this._qualityLevels },
+        isLive: { enumerable: true, get: () => this._isLive },
+      });
+
+      this._capabilities = caps;
+    }
+
+    return this._capabilities;
   }
 
-  private readSeekableRange(): { start: number; end: number } | null {
+  private readSeekableRange(): SeekableRange | null {
     const ranges = this._mediaElement?.seekable;
     if (!ranges || ranges.length === 0) {
       return null;
@@ -395,6 +417,7 @@ export class HLSHandler implements ISourceHandler {
     this._qualityLevels = [];
     this._isLive = false;
     this._mediaElement = null;
+    this._capabilities = null;
     this._networkRetries = 0;
     this._mediaRecoveryStage = 0;
     this._signal = null;

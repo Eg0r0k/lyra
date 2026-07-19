@@ -1715,4 +1715,78 @@ describe("Player", () => {
       expect(player.currentTime).toBe(12);
     });
   });
+
+  describe("SourceCapabilities caching + error ownership (T-30)", () => {
+    it("does not re-invoke handler.getCapabilities() on the timeupdate hot path (F-52)", async () => {
+      let getCapabilitiesCalls = 0;
+      const caps = { isLive: false }; // stable object
+      const handler: ISourceHandler = {
+        id: "counting",
+        canHandle: (s) => s.url === "https://custom.example.com/x.mp3",
+        preferredStrategy: () => "any",
+        prepare: async (source) => ({
+          sourceUrl: (source as { url?: string }).url as string,
+          duration: 1,
+        }),
+        getCapabilities: () => {
+          getCapabilitiesCalls += 1;
+          return caps;
+        },
+        dispose: () => undefined,
+      };
+
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      player.registerHandler(handler);
+      await player.load("https://custom.example.com/x.mp3");
+      await player.play();
+
+      const callsAfterLoad = getCapabilitiesCalls;
+      const el = getLatestAudioElement();
+      el.emitTimeUpdate(1);
+      el.emitTimeUpdate(2);
+      el.emitTimeUpdate(3);
+
+      // player.isLive (read from the timeupdate relay) reads the cached
+      // reference — the handler is not re-queried per tick.
+      expect(getCapabilitiesCalls).toBe(callsAfterLoad);
+    });
+
+    it("attaches the element error handler unless ownsMediaErrors is set (not merely onRuntimeError present)", async () => {
+      const makeErrorChannelHandler = (ownsMediaErrors: boolean): ISourceHandler => ({
+        id: "err-channel",
+        canHandle: (s) => s.url === "https://custom.example.com/x.mp3",
+        preferredStrategy: () => "any",
+        prepare: async (source) => ({
+          sourceUrl: (source as { url?: string }).url as string,
+          duration: 1,
+        }),
+        getCapabilities: () => ({
+          onRuntimeError: () => undefined, // exposes a channel but never fires
+          ownsMediaErrors,
+        }),
+        dispose: () => undefined,
+      });
+
+      // No ownsMediaErrors → the player still attaches its element error handler,
+      // so a native element error surfaces (pre-T-30 this was suppressed merely
+      // because onRuntimeError was present).
+      const attached = trackPlayer(new Player({ mode: "html5" }));
+      attached.registerHandler(makeErrorChannelHandler(false));
+      const attachedErr = vi.fn();
+      attached.on("error", attachedErr);
+      await attached.load("https://custom.example.com/x.mp3");
+      getLatestAudioElement().dispatchEvent(new Event("error"));
+      expect(attachedErr).toHaveBeenCalledTimes(1);
+
+      // ownsMediaErrors → the handler owns surfacing, so the element handler is
+      // NOT attached and a raw element error does not double-emit through it.
+      const owned = trackPlayer(new Player({ mode: "html5" }));
+      owned.registerHandler(makeErrorChannelHandler(true));
+      const ownedErr = vi.fn();
+      owned.on("error", ownedErr);
+      await owned.load("https://custom.example.com/x.mp3");
+      getLatestAudioElement().dispatchEvent(new Event("error"));
+      expect(ownedErr).not.toHaveBeenCalled();
+    });
+  });
 });

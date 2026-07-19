@@ -19,7 +19,7 @@ import { PlayerState } from "../types";
 import { HTML5Strategy } from "../strategy/Html5AudioStrategy";
 import { WebAudioStrategy } from "../strategy/WebAudioStrategy";
 import { AudioGraph } from "../audio/AudioGraph";
-import { ISourceHandler, SourceManager } from "../source";
+import { ISourceHandler, SourceCapabilities, SourceManager } from "../source";
 import {
   computeNormalizationGainDb,
   LoudnessMetadata,
@@ -90,6 +90,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   private _currentStrategy: IPlaybackStrategy | null = null;
   private _currentHandler: ISourceHandler | null = null;
+  /**
+   * Capabilities reference for the current session, cached at load (T-30). Used
+   * on the hot path (`isLive` from `timeupdate`) and for one-time load wiring so
+   * the 4/s tick never re-invokes a possibly-allocating handler `getCapabilities`.
+   * Post-load user reads (quality, live seekable window) re-fetch fresh instead.
+   */
+  private _activeCapabilities: SourceCapabilities | null = null;
   private _cancellation: CancellationToken | null = null;
 
   private _options: ResolvedPlayerOptions;
@@ -251,7 +258,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
    * handler reports no live capability.
    */
   get isLive(): boolean {
-    return this._sourceManager.getActiveCapabilities()?.isLive ?? false;
+    return this._activeCapabilities?.isLive ?? false;
   }
 
   get isFading(): boolean {
@@ -590,6 +597,11 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this._sourceManager.setActiveHandler(handler);
 
+      // Cache the capabilities reference for this session (T-30 / F-52). Built-in
+      // handlers return a stable object with live getters, so the hot-path
+      // isLive read and the one-time load wiring below never allocate.
+      this._activeCapabilities = this._sourceManager.getActiveCapabilities();
+
       // Only resolve an AudioContext when this load actually routes — an
       // un-routed html5 load ('never' or CORS fallback) must not create one.
       const initStrategy = async (): Promise<void> => {
@@ -666,7 +678,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       playerLogger.debug("Load complete, duration:", this.duration);
 
-      const capabilities = this._sourceManager.getActiveCapabilities();
+      const capabilities = this._activeCapabilities;
 
       // Runtime (post-load) error channel: the handler (e.g. HLS) surfaces
       // unrecoverable errors here after its own recovery is exhausted (F-07).
@@ -1280,10 +1292,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
 
     if (this._currentStrategy instanceof HTML5Strategy) {
-      // A handler that owns a runtime-error channel (HLS) surfaces element
-      // failures itself; attaching the element error handler too would emit the
-      // error twice. Only attach it when no such channel exists.
-      if (!this._sourceManager.getActiveCapabilities()?.onRuntimeError) {
+      // A handler that owns media-error surfacing (HLS, via its onRuntimeError
+      // channel) reports element failures itself; attaching the element error
+      // handler too would emit the error twice. Gate on the EXPLICIT
+      // ownsMediaErrors flag (T-30) — not merely the presence of onRuntimeError,
+      // so a custom handler can expose a runtime channel without suppressing it.
+      if (!this._activeCapabilities?.ownsMediaErrors) {
         this._currentStrategy.attachErrorHandler();
       }
     }
@@ -1379,6 +1393,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._currentHandler = null;
 
     this._sourceManager.clearActiveHandler();
+    this._activeCapabilities = null;
 
     for (const url of this._objectUrls) {
       URL.revokeObjectURL(url);

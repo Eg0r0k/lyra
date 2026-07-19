@@ -19,6 +19,7 @@ export { WebAudioStrategy } from "./strategy/WebAudioStrategy";
 export type {
   ISourceHandler,
   PreparedSource,
+  SeekableRange,
   SourceCapabilities,
 } from "./source/ISourceHandler";
 

@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Player } from "../index";
+import { Player, HLSHandler, HTML5Strategy } from "../index";
 import type { HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
 import { getLatestAudioElement } from "./test-utils";
@@ -504,5 +504,36 @@ describe("HLS", () => {
     el.currentTime = 90;
     el.dispatchEvent(new Event("timeupdate"));
     expect(progresses[progresses.length - 1]).toBeCloseTo(0.5);
+  });
+
+  it("getCapabilities returns a stable per-session object that owns media errors (T-30)", async () => {
+    const handler = new HLSHandler(
+      undefined,
+      MockHls as unknown as HlsConstructor,
+    );
+    const strategy = new HTML5Strategy();
+
+    await handler.prepare(
+      { url: "https://cdn.example.com/p.m3u8", type: "hls" },
+      strategy,
+      null,
+      new AbortController().signal,
+    );
+
+    const caps1 = handler.getCapabilities();
+    const caps2 = handler.getCapabilities();
+
+    // Same reference across calls (F-52: the player can cache it cheaply).
+    expect(caps1).not.toBeNull();
+    expect(caps1).toBe(caps2);
+    // Explicit media-error ownership (T-30 dedupe signal).
+    expect(caps1?.ownsMediaErrors).toBe(true);
+
+    // reset() drops the session object; with no hls session capabilities are null.
+    handler.reset();
+    expect(handler.getCapabilities()).toBeNull();
+
+    strategy.dispose();
+    handler.dispose();
   });
 });

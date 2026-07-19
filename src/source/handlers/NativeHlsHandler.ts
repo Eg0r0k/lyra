@@ -24,6 +24,11 @@ export class NativeHlsHandler implements ISourceHandler {
   private _supportsNativeHls: boolean | null = null;
   /** Media element of the active load — source of isLive + seekable range. */
   private _mediaElement: HTMLMediaElement | null = null;
+  /**
+   * Stable per-session capabilities object (T-30 / F-52). Built once, reused,
+   * dropped on reset(); its `isLive`/seekable getters read the live element.
+   */
+  private _capabilities: SourceCapabilities | null = null;
 
   canHandle(source: AudioSource): boolean {
     return isHlsSource(source) && this.supportsNativeHls();
@@ -61,28 +66,42 @@ export class NativeHlsHandler implements ISourceHandler {
   }
 
   getCapabilities(): SourceCapabilities | null {
-    const element = this._mediaElement;
-    // Native HLS exposes no level API; quality methods are intentionally absent.
-    return {
-      qualityLevels: [],
-      // Live playlists surface an Infinity duration once metadata is loaded.
-      isLive: element ? element.duration === Infinity : false,
-      getSeekableRange: () => {
-        const ranges = element?.seekable;
-        if (!ranges || ranges.length === 0) {
-          return null;
-        }
-        return { start: ranges.start(0), end: ranges.end(ranges.length - 1) };
-      },
-    };
+    // Stable per-session object (T-30 / F-52). Native HLS exposes no level API,
+    // so quality methods are absent; `isLive` is a live getter (the element's
+    // duration only becomes Infinity once metadata loads) and reads the current
+    // element via `this`. No `ownsMediaErrors`, so the player keeps its HTML5
+    // element error handler for native-HLS load failures.
+    if (!this._capabilities) {
+      const caps: SourceCapabilities = {
+        qualityLevels: [],
+        getSeekableRange: () => {
+          const ranges = this._mediaElement?.seekable;
+          if (!ranges || ranges.length === 0) {
+            return null;
+          }
+          return { start: ranges.start(0), end: ranges.end(ranges.length - 1) };
+        },
+      };
+
+      Object.defineProperty(caps, "isLive", {
+        enumerable: true,
+        get: () => this._mediaElement?.duration === Infinity,
+      });
+
+      this._capabilities = caps;
+    }
+
+    return this._capabilities;
   }
 
   reset(): void {
     this._mediaElement = null;
+    this._capabilities = null;
   }
 
   dispose(): void {
     this._mediaElement = null;
+    this._capabilities = null;
   }
 
   private supportsNativeHls(): boolean {
