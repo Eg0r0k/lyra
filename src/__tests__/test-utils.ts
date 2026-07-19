@@ -263,6 +263,7 @@ type AudioMockState = {
   nextLoadError: MockMediaError | null;
   nextPlayError: Error | null;
   nextPlayDeferred: Promise<void> | null;
+  pitchVendor: "standard" | "webkit" | "moz" | "none";
 };
 
 const audioMockState: AudioMockState = {
@@ -273,6 +274,7 @@ const audioMockState: AudioMockState = {
   nextLoadError: null,
   nextPlayError: null,
   nextPlayDeferred: null,
+  pitchVendor: "standard",
 };
 
 export class MockAudioElement extends EventTarget {
@@ -299,6 +301,28 @@ export class MockAudioElement extends EventTarget {
   constructor() {
     super();
     this.duration = audioMockState.defaultDuration;
+
+    // Expose the pitch-preservation property for the configured vendor so
+    // `'preservesPitch' in el` feature detection behaves per-engine.
+    const pitch = this as MockAudioElement & {
+      preservesPitch?: boolean;
+      webkitPreservesPitch?: boolean;
+      mozPreservesPitch?: boolean;
+    };
+    switch (audioMockState.pitchVendor) {
+      case "standard":
+        pitch.preservesPitch = true;
+        break;
+      case "webkit":
+        pitch.webkitPreservesPitch = true;
+        break;
+      case "moz":
+        pitch.mozPreservesPitch = true;
+        break;
+      case "none":
+        break;
+    }
+
     audioMockState.instances.push(this);
   }
 
@@ -459,12 +483,19 @@ export function resetBrowserMocks(): void {
   audioMockState.nextLoadError = null;
   audioMockState.nextPlayError = null;
   audioMockState.nextPlayDeferred = null;
+  audioMockState.pitchVendor = "standard";
   objectUrlCounter = 0;
   nativeHlsSupported = false;
 }
 
 export function setAudioAutoLoadCanPlay(value: boolean): void {
   audioMockState.autoLoadCanPlay = value;
+}
+
+export function setMockPitchVendor(
+  vendor: "standard" | "webkit" | "moz" | "none",
+): void {
+  audioMockState.pitchVendor = vendor;
 }
 
 export function setAudioLoadDelay(ms: number): void {

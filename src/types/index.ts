@@ -118,6 +118,12 @@ export interface PlayerOptions {
    * disabled for that track). Default `false` — the media error surfaces as-is.
    */
   corsFallback?: boolean;
+  /**
+   * Preserve pitch when `playbackRate !== 1` (default `true`). Applied live to
+   * the html5 element (and to future loads). WebAudio shifts pitch with rate
+   * until a time-stretch plugin is provided; see {@link Player.canPreservePitch}.
+   */
+  preservesPitch?: boolean;
   hlsConfig?: Partial<HLSConfig>;
   loudnessNormalization?: LoudnessNormalizationOptions;
   Hls?: HlsConstructor;
@@ -154,6 +160,7 @@ export const DEFAULT_OPTIONS: ResolvedPlayerOptions = {
   preload: "auto",
   webAudioRouting: "always",
   corsFallback: false,
+  preservesPitch: true,
   hlsConfig: {
     maxBufferLength: 30,
     maxMaxBufferLength: 60,

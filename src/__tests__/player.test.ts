@@ -29,6 +29,7 @@ import {
   mockFetchSuccess,
   setAudioAutoLoadCanPlay,
   setMockAudioDuration,
+  setMockPitchVendor,
   setNativeHlsSupport,
   setNextAudioLoadError,
   setNextAudioPlayDeferred,
@@ -502,6 +503,7 @@ describe("Player", () => {
         muted: false,
         playbackRate: createPlaybackRate(1),
         loop: false,
+        preservesPitch: true,
         preload: "auto",
         signal: controller.signal,
       });
@@ -1161,6 +1163,77 @@ describe("Player", () => {
 
       expect(prepare).toHaveBeenCalledTimes(1);
       expect(player.state).toBe("ready");
+    });
+  });
+
+  describe("preservesPitch (T-23)", () => {
+    it("html5 initialize sets preservesPitch on the element (default true)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+
+      const el = getLatestAudioElement() as MockAudioElement & {
+        preservesPitch?: boolean;
+      };
+      expect(el.preservesPitch).toBe(true);
+      expect(player.preservesPitch).toBe(true);
+      expect(player.canPreservePitch).toBe(true);
+    });
+
+    it("setPreservesPitch(false) applies to the live element immediately (toggle while playing)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+
+      const el = getLatestAudioElement() as MockAudioElement & {
+        preservesPitch?: boolean;
+      };
+      expect(el.preservesPitch).toBe(true);
+
+      player.setPreservesPitch(false);
+
+      // Applied to the ALREADY-loaded element now — not deferred to next load.
+      expect(el.preservesPitch).toBe(false);
+      expect(player.preservesPitch).toBe(false);
+    });
+
+    it("falls back to the webkit vendor property when the standard one is absent", async () => {
+      setMockPitchVendor("webkit");
+      const player = trackPlayer(
+        new Player({ mode: "html5", preservesPitch: false }),
+      );
+      await player.load("https://cdn.example.com/song.mp3");
+
+      const el = getLatestAudioElement() as MockAudioElement & {
+        preservesPitch?: boolean;
+        webkitPreservesPitch?: boolean;
+      };
+      expect("preservesPitch" in el).toBe(false);
+      expect(el.webkitPreservesPitch).toBe(false);
+      expect(player.canPreservePitch).toBe(true);
+    });
+
+    it("reports canPreservePitch=false in webaudio mode", async () => {
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      await player.load({ data: createArrayBuffer() });
+
+      expect(player.canPreservePitch).toBe(false);
+    });
+
+    it("webaudio warns once when pitch preservation is requested with rate != 1", async () => {
+      const warn = vi.spyOn(playerLogger, "warn");
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", preservesPitch: true, playbackRate: 1.5 }),
+      );
+      await player.load({ data: createArrayBuffer() });
+
+      // A further rate change must not re-warn (latched).
+      player.setPlaybackRate(2);
+
+      const pitchWarnings = warn.mock.calls.filter((c) =>
+        String(c[0]).includes("preservesPitch requested"),
+      );
+      expect(pitchWarnings).toHaveLength(1);
+      warn.mockRestore();
     });
   });
 });

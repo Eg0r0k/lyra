@@ -89,6 +89,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private _muted: boolean;
   private _playbackRate: PlaybackRate;
   private _loop: boolean;
+  private _preservesPitch: boolean;
 
   private _objectUrls: Set<string> = new Set();
 
@@ -128,6 +129,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._muted = this._options.muted;
     this._playbackRate = PlaybackRate(this._options.playbackRate);
     this._loop = this._options.loop;
+    this._preservesPitch = this._options.preservesPitch;
 
     this._stateManager.onChange(({ from, to }) => {
       this.emit("statechange", { from, to });
@@ -544,6 +546,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
           muted: this._muted,
           playbackRate: this._playbackRate,
           loop: this._loop,
+          preservesPitch: this._preservesPitch,
           preload: this._options.preload,
           metadata: prepared.metadata,
           requiresCrossOrigin: strategyType === "html5" && routeGraph,
@@ -886,6 +889,30 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this._loop = loop;
 
     this._currentStrategy?.setLoop(loop);
+  }
+
+  get preservesPitch(): boolean {
+    return this._preservesPitch;
+  }
+
+  /**
+   * Whether the ACTIVE strategy can actually preserve pitch: html5 (feature
+   * detected on the element) → typically true; webaudio → false until a
+   * time-stretch plugin is wired (T-24). `false` when nothing is loaded.
+   */
+  get canPreservePitch(): boolean {
+    return this._currentStrategy?.canPreservePitch ?? false;
+  }
+
+  /**
+   * Set pitch-preservation intent. Applied to the current source immediately
+   * (a toggle mid-playback changes the sound now, not on the next load) and
+   * carried into subsequent loads.
+   */
+  setPreservesPitch(value: boolean): void {
+    this._preservesPitch = value;
+
+    this._currentStrategy?.setPreservesPitch(value);
   }
 
   async fadeTo(volume: number, durationSec: number = 1): Promise<void> {

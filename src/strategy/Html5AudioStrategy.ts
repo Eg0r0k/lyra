@@ -9,6 +9,13 @@ import { PlayerError, PlayerErrorCode } from "../types/events";
 import { playerLogger } from "../utils/Logger";
 import { isCrossOrigin } from "../utils/url";
 
+/** Standard + vendor pitch-preservation property names, checked in order. */
+const PITCH_PROPS = [
+  "preservesPitch",
+  "webkitPreservesPitch",
+  "mozPreservesPitch",
+] as const;
+
 /**
  * HTML5-based playback strategy built on top of the native
  * {@link HTMLAudioElement} API.
@@ -59,6 +66,7 @@ export class HTML5Strategy
    */
   private _sourceNode: MediaElementAudioSourceNode | null = null;
   private _isReady = false;
+  private _preservesPitch = true;
   private _wasBuffering = false;
   /**
    * Cleanup for the currently pending initialize() waiter, if any.
@@ -154,6 +162,8 @@ export class HTML5Strategy
     this._audio.muted = options.muted;
     this._audio.playbackRate = options.playbackRate;
     this._audio.loop = options.loop;
+    this._preservesPitch = options.preservesPitch;
+    this.applyPreservesPitch();
     this._audio.preload = options.preload;
 
     if (options.sourceUrl) {
@@ -338,6 +348,34 @@ export class HTML5Strategy
 
   setLoop(loop: boolean): void {
     this._audio.loop = loop;
+  }
+
+  /**
+   * Apply pitch-preservation intent to the live element immediately (so a
+   * toggle during playback changes the sound, not just future loads). Uses the
+   * standard `preservesPitch`, falling back to the `webkit`/`moz` vendor
+   * properties on older Safari/Firefox.
+   */
+  setPreservesPitch(value: boolean): void {
+    this._preservesPitch = value;
+    this.applyPreservesPitch();
+  }
+
+  /**
+   * Whether the element exposes any pitch-preservation property. Usable pitch
+   * quality is roughly 0.5x-2x; extreme rates degrade or mute (browser-defined).
+   */
+  get canPreservePitch(): boolean {
+    const el = this._audio as unknown as Record<string, unknown>;
+    return PITCH_PROPS.some((key) => key in el);
+  }
+
+  private applyPreservesPitch(): void {
+    const el = this._audio as unknown as Record<string, unknown>;
+    const key = PITCH_PROPS.find((prop) => prop in el);
+    if (key) {
+      el[key] = this._preservesPitch;
+    }
   }
   /**
    * Connects media element output into WebAudio graph.

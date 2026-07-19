@@ -57,6 +57,9 @@ export class WebAudioStrategy
   private _isPlaying = false;
   private _isReady = false;
   private _loop = false;
+  private _preservesPitch = true;
+  /** Ensures the "pitch preservation unavailable" warning logs at most once. */
+  private _pitchWarned = false;
 
   private _playbackRate: PlaybackRate = 1 as PlaybackRate;
   private _muted = false;
@@ -121,6 +124,8 @@ export class WebAudioStrategy
     this._muted = options.muted;
     this._playbackRate = options.playbackRate;
     this._loop = options.loop;
+    this._preservesPitch = options.preservesPitch;
+    this.warnIfPitchUnsupported();
 
     if (options.audioBuffer) {
       this._audioBuffer = options.audioBuffer;
@@ -370,9 +375,36 @@ export class WebAudioStrategy
     }
 
     this._playbackRate = rate;
+    this.warnIfPitchUnsupported();
 
     if (this._sourceNode) {
       this._sourceNode.playbackRate.value = rate;
+    }
+  }
+
+  /**
+   * WebAudio resampling shifts pitch with rate; true pitch preservation needs a
+   * time-stretch node (T-24), which is not wired here. Store the intent and warn
+   * once so the divergence is not silent.
+   */
+  setPreservesPitch(value: boolean): void {
+    this._preservesPitch = value;
+    this.warnIfPitchUnsupported();
+  }
+
+  /** WebAudio cannot preserve pitch without a time-stretch plugin (T-24). */
+  get canPreservePitch(): boolean {
+    return false;
+  }
+
+  private warnIfPitchUnsupported(): void {
+    if (this._preservesPitch && this._playbackRate !== 1 && !this._pitchWarned) {
+      this._pitchWarned = true;
+      playerLogger.warn(
+        "preservesPitch requested but the WebAudio strategy shifts pitch with " +
+          "playbackRate; a time-stretch plugin (T-24) is required for true " +
+          "pitch preservation.",
+      );
     }
   }
   /**

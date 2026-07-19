@@ -31,6 +31,8 @@ export interface StrategyInitOptions {
   muted: boolean;
   playbackRate: PlaybackRate;
   loop: boolean;
+  /** Preserve pitch when playbackRate !== 1 (default true). */
+  preservesPitch: boolean;
   preload: "none" | "metadata" | "auto";
   metadata?: Record<string, unknown>;
   requiresCrossOrigin?: boolean;
@@ -65,6 +67,10 @@ export interface IPlaybackStrategy {
   setMuted(muted: boolean): void;
   setPlaybackRate(rate: PlaybackRate): void;
   setLoop(loop: boolean): void;
+  /** Apply pitch-preservation intent to the active source immediately. */
+  setPreservesPitch(value: boolean): void;
+  /** Whether this strategy can actually preserve pitch on the current engine. */
+  readonly canPreservePitch: boolean;
   /**
    * Returns underlying media element if available.
    */

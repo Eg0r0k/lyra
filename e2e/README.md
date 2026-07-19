@@ -88,6 +88,11 @@ release:
   `PLAYBACK_NOT_ALLOWED`; after a tap/click it succeeds.
 - **iOS element volume** (post T-10): volume via the graph works even though
   `HTMLMediaElement.volume` is read-only on iOS.
+- **Pitch preservation** (T-23): play a tone at `playbackRate` 1.5 with
+  `preservesPitch:true` (default) → pitch unchanged, only tempo; toggle
+  `setPreservesPitch(false)` **mid-playback** → pitch audibly rises immediately
+  (proves the toggle hits the live element, not just the next load). jsdom/
+  Playwright can assert the element property but cannot "hear" pitch.
 
 ## CI note
 
