@@ -449,7 +449,10 @@ describe("Player", () => {
       player.setPlaybackRate(32);
       expect(player.playbackRate).toBe(16);
 
-      player.setPlaybackRate(0);
+      player.setPlaybackRate(0); // finite → clamps into [0.0625, 16] (F-26)
+      expect(player.playbackRate).toBe(0.0625);
+
+      player.setPlaybackRate(NaN); // non-finite → safe default 1
       expect(player.playbackRate).toBe(1);
 
       player.setLoop(true);

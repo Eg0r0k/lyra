@@ -67,7 +67,7 @@ export class HLSHandler implements ISourceHandler {
     if (this._Hls) {
       // noop
     } else {
-      console.debug("[HLSHandler] No Hls class provided");
+      playerLogger.debug("[HLSHandler] No Hls class provided");
     }
   }
 
@@ -170,9 +170,6 @@ export class HLSHandler implements ISourceHandler {
           signal.removeEventListener("abort", onAbort);
           resolve({
             duration: audioElement.duration || 0,
-            metadata: {
-              preAttachedMedia: true,
-            },
           });
         }
       };

@@ -446,6 +446,19 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._audioGraph?.getNormalizationGainDb() ?? 0;
   }
 
+  /**
+   * Perform an FSM transition and, when the table rejects it, log the calling
+   * operation for context (StateManager already warns). Used at the
+   * load-critical sites so a stuck load is diagnosable (F-31).
+   */
+  private transitionTo(to: PlayerState, op: string): boolean {
+    const ok = this._stateManager.transition(to);
+    if (!ok) {
+      playerLogger.debug(`Transition to "${to}" rejected during ${op}()`);
+    }
+    return ok;
+  }
+
   async load(source: AudioSourceInput, loadOptions?: LoadOptions): Promise<void> {
     const normalized = normalizeSource(source);
 
@@ -481,7 +494,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       this._loudnessMetadata = null;
     }
 
-    this._stateManager.transition("loading");
+    this.transitionTo("loading", "load");
 
     this.emit("loadstart");
 
@@ -604,7 +617,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
       this.recomputeNormalization();
 
-      this._stateManager.transition("ready");
+      this.transitionTo("ready", "load");
 
       this.emit("loadedmetadata", {
         duration: this.duration,
@@ -652,7 +665,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         return;
       }
 
-      this._stateManager.transition("error");
+      this.transitionTo("error", "load");
 
       const playerError = PlayerError.fromError(err, inferLoadErrorCode(err));
 
@@ -755,7 +768,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    this._stateManager.transition("playing");
+    this.transitionTo("playing", "play");
 
     playerLogger.debug("Playback started");
   }

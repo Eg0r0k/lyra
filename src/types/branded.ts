@@ -20,9 +20,12 @@ export function TimeSeconds(value: number): TimeSeconds {
   }
   return value as TimeSeconds;
 }
-
+/**
+ * Playback rate. Non-finite inputs (NaN/Infinity) fall back to `1`; every finite
+ * value — including `0` and negatives — clamps into `[0.0625, 16]` (F-26).
+ */
 export function PlaybackRate(value: number): PlaybackRate {
-  if (!Number.isFinite(value) || value <= 0) {
+  if (!Number.isFinite(value)) {
     return 1 as PlaybackRate;
   }
   return Math.max(0.0625, Math.min(16, value)) as PlaybackRate;
