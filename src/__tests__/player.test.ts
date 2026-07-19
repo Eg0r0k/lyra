@@ -21,11 +21,13 @@ import {
   MockAudioElement,
   MockMediaError,
   createArrayBuffer,
+  createMockTimeStretch,
   createDeferred,
   fetchMock,
   getLatestAudioContext,
   getLatestAudioElement,
   getLatestGainNode,
+  getLatestBufferSourceNode,
   mockFetchSuccess,
   setAudioAutoLoadCanPlay,
   setMockAudioDuration,
@@ -1423,6 +1425,88 @@ describe("Player", () => {
       ctx.setState("suspended");
       ctx.setState("running");
       expect(resumed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("time-stretch plugin (T-24)", () => {
+    it("drives rate via the plugin and keeps the source at 1.0 (no double rate)", async () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", timeStretch: stretch.factory }),
+      );
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.setPlaybackRate(1.5);
+
+      // Source runs at 1.0; the plugin owns tempo — applying rate to both would
+      // be audible as chipmunk+slow (double rate).
+      expect(getLatestBufferSourceNode().playbackRate.value).toBe(1);
+      expect(stretch.setRate).toHaveBeenLastCalledWith(1.5);
+    });
+
+    it("reports canPreservePitch === true in webaudio mode with a plugin", async () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", timeStretch: stretch.factory }),
+      );
+      await player.load({ data: createArrayBuffer() });
+
+      expect(player.canPreservePitch).toBe(true);
+    });
+
+    it("derives currentTime from the plugin's input position", async () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", timeStretch: stretch.factory }),
+      );
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      stretch.setPosition(42);
+      expect(player.currentTime).toBe(42); // not the ctx-clock math
+    });
+
+    it("flushes the plugin on seek (no stale buffer bleed)", async () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", timeStretch: stretch.factory }),
+      );
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.seek(10);
+      expect(stretch.flush).toHaveBeenCalled();
+    });
+
+    it("without a plugin the resampling path is untouched (source carries the rate)", async () => {
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.setPlaybackRate(1.5);
+
+      expect(getLatestBufferSourceNode().playbackRate.value).toBe(1.5);
+      expect(player.canPreservePitch).toBe(false);
+    });
+
+    it("ignores the plugin when preservesPitch is false (resamples, no attach)", async () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          timeStretch: stretch.factory,
+          preservesPitch: false,
+        }),
+      );
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.setPlaybackRate(1.5);
+
+      expect(getLatestBufferSourceNode().playbackRate.value).toBe(1.5);
+      expect(stretch.setRate).not.toHaveBeenCalled();
+      expect(player.canPreservePitch).toBe(false);
     });
   });
 });

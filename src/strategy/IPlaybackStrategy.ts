@@ -1,4 +1,5 @@
 import { PlaybackRate, TimeSeconds, Volume } from "../types/branded";
+import type { TimeStretchFactory } from "./ITimeStretchNode";
 
 /**
  * Events emitted by playback strategies.
@@ -34,6 +35,12 @@ export interface StrategyInitOptions {
   loop: boolean;
   /** Preserve pitch when playbackRate !== 1 (default true). */
   preservesPitch: boolean;
+  /**
+   * Optional time-stretch plugin factory (T-24). WebAudioStrategy uses it when
+   * `preservesPitch` is true to change tempo without pitch; other strategies
+   * ignore it.
+   */
+  timeStretch?: TimeStretchFactory;
   preload: "none" | "metadata" | "auto";
   metadata?: Record<string, unknown>;
   requiresCrossOrigin?: boolean;

@@ -7,6 +7,7 @@ import { PlaybackRate, TimeSeconds, Volume } from "../types/branded";
 import { EventEmitter } from "../core/EventEmitter";
 import { PlayerError, PlayerErrorCode } from "../types/events";
 import { playerLogger } from "../utils/Logger";
+import type { ITimeStretchNode } from "./ITimeStretchNode";
 
 /**
  * Public `timeupdate` cadence (~4/s), aligned with native HTML5 media. Uses a
@@ -61,6 +62,12 @@ export class WebAudioStrategy
   private _audioBuffer: AudioBuffer | null = null;
   private _sourceNode: AudioBufferSourceNode | null = null;
   private _gainNode: GainNode | null = null;
+  /**
+   * Optional injected time-stretch plugin (T-24). When present, the source
+   * plays at rate 1.0 into it and it owns tempo (via setRate) and the
+   * position source of truth (via getInputPosition); null = resampling path.
+   */
+  private _stretcher: ITimeStretchNode | null = null;
 
   private _isPlaying = false;
   private _isReady = false;
@@ -165,6 +172,26 @@ export class WebAudioStrategy
           error,
         );
       }
+
+      if (options.timeStretch && this._preservesPitch) {
+        const ctx = options.audioContext;
+        const gain = this._gainNode;
+
+        this._stretcher = await options.timeStretch(ctx);
+
+        if (options.signal.aborted) {
+          this._stretcher.dispose();
+          this._stretcher = null;
+          throw new DOMException("Aborted", "AbortError");
+        }
+
+        // source → gain → stretcher → (connectToGraph) → AudioGraph.input, so
+        // EQ/analyser act on the pitch-corrected, time-stretched signal (T-24).
+        gain?.connect(this._stretcher.node);
+        this._stretcher.setRate(this._playbackRate);
+
+        playerLogger.debug("Time-stretch plugin attached", `rate=${this._playbackRate}`);
+      }
     } else if (options.sourceUrl) {
       throw new PlayerError(
         "WebAudioStrategy requires audioBuffer, not sourceUrl",
@@ -220,7 +247,11 @@ export class WebAudioStrategy
       this._sourceNode = this._ctx.createBufferSource();
       this._sourceNode.buffer = this._audioBuffer;
       this._sourceNode.loop = this._loop;
-      this._sourceNode.playbackRate.value = this._playbackRate;
+      // In stretcher mode the source runs at 1.0 and the plugin owns tempo;
+      // otherwise the source's own playbackRate resamples (pitch shifts) (T-24).
+      this._sourceNode.playbackRate.value = this._stretcher
+        ? 1
+        : this._playbackRate;
 
       this._sourceNode.connect(this._gainNode);
 
@@ -326,6 +357,10 @@ export class WebAudioStrategy
 
       this._pausedAt = Math.max(0, Math.min(time, this.duration));
 
+      // Drop the plugin's buffered (already-stretched) audio so it doesn't
+      // bleed past the new position after the restart (T-24).
+      this._stretcher?.flush();
+
       if (wasPlaying) {
         this.play().catch((err) => {
           playerLogger.error("Seek replay failed", err);
@@ -355,10 +390,17 @@ export class WebAudioStrategy
       return this._lastKnownTime;
     }
 
-    const elapsed =
-      (this._ctx.currentTime - this._startTime) * this._playbackRate;
+    let current: number;
 
-    let current = this._startOffset + elapsed;
+    if (this._stretcher) {
+      // Position source of truth in stretcher mode: the source clock runs at
+      // 1.0 and doesn't reflect the stretched tempo, so read the plugin (T-24).
+      current = this._stretcher.getInputPosition();
+    } else {
+      const elapsed =
+        (this._ctx.currentTime - this._startTime) * this._playbackRate;
+      current = this._startOffset + elapsed;
+    }
 
     if (this._loop && this._audioBuffer) {
       current = current % this._audioBuffer.duration;
@@ -399,7 +441,10 @@ export class WebAudioStrategy
       `${this._playbackRate} -> ${rate}`,
     );
 
-    if (this._isPlaying && this._sourceNode && this._ctx) {
+    // Resampling advances position via the ctx clock × rate, so a rate change
+    // must re-anchor _startTime; stretcher mode reads position from the plugin
+    // and keeps the source at 1.0, so that math is bypassed (T-24).
+    if (!this._stretcher && this._isPlaying && this._sourceNode && this._ctx) {
       this._pausedAt = this.getCurrentTime();
       this._startTime = this._ctx.currentTime;
       this._startOffset = this._pausedAt;
@@ -408,7 +453,9 @@ export class WebAudioStrategy
     this._playbackRate = rate;
     this.warnIfPitchUnsupported();
 
-    if (this._sourceNode) {
+    if (this._stretcher) {
+      this._stretcher.setRate(rate);
+    } else if (this._sourceNode) {
       this._sourceNode.playbackRate.value = rate;
     }
   }
@@ -423,12 +470,17 @@ export class WebAudioStrategy
     this.warnIfPitchUnsupported();
   }
 
-  /** WebAudio cannot preserve pitch without a time-stretch plugin (T-24). */
+  /**
+   * True only when a time-stretch plugin is attached (T-24); plain WebAudio
+   * resampling shifts pitch with rate and cannot preserve it.
+   */
   get canPreservePitch(): boolean {
-    return false;
+    return this._stretcher !== null;
   }
 
   private warnIfPitchUnsupported(): void {
+    // A plugin preserves pitch, so the resampling warning does not apply.
+    if (this._stretcher) return;
     if (this._preservesPitch && this._playbackRate !== 1 && !this._pitchWarned) {
       this._pitchWarned = true;
       playerLogger.warn(
@@ -465,9 +517,9 @@ export class WebAudioStrategy
     }
   }
   /**
-   * Returns strategy output node for AudioGraph routing.
-   *
-   * @returns Gain node connected to playback chain.
+   * Returns the strategy's output node for AudioGraph routing: the time-stretch
+   * plugin's output when one is attached (so EQ/analyser see the stretched
+   * signal), otherwise the gain node (T-24).
    *
    * @throws {PlayerError}
    * Thrown if strategy is not initialized.
@@ -482,7 +534,7 @@ export class WebAudioStrategy
 
     playerLogger.debug("Connecting strategy to audio graph");
 
-    return this._gainNode;
+    return this._stretcher?.node ?? this._gainNode;
   }
   /**
    * Starts the public timeupdate emitter (timer-based, ~4/s). Position is read
@@ -531,6 +583,8 @@ export class WebAudioStrategy
     this.stopTimeUpdate();
 
     this._gainNode?.disconnect();
+    this._stretcher?.dispose();
+    this._stretcher = null;
 
     this._gainNode = null;
     this._audioBuffer = null;

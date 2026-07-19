@@ -11,6 +11,10 @@ export type {
   StrategyInitOptions,
   PlaybackStrategyEvents,
 } from "./strategy/IPlaybackStrategy";
+export type {
+  ITimeStretchNode,
+  TimeStretchFactory,
+} from "./strategy/ITimeStretchNode";
 
 // Classes
 export { HTML5Strategy } from "./strategy/Html5AudioStrategy";

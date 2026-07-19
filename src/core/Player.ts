@@ -1,5 +1,6 @@
 import { EventEmitter } from "../core/EventEmitter";
 import { IPlaybackStrategy } from "../strategy/IPlaybackStrategy";
+import type { TimeStretchFactory } from "../strategy/ITimeStretchNode";
 import { PlayerError, PlayerErrorCode, PlayerEventMap } from "../types/events";
 import { StateManager } from "./StateManager";
 import {
@@ -65,11 +66,15 @@ function inferLoadErrorCode(error: unknown): PlayerErrorCode {
 const UNLOCK_TIMEOUT_MS = 2_000;
 
 type ResolvedPlayerOptions = Required<
-  Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "audioContext">
+  Omit<
+    PlayerOptions,
+    "Hls" | "loudnessNormalization" | "audioContext" | "timeStretch"
+  >
 > & {
   loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
   audioContext?: AudioContext;
+  timeStretch?: TimeStretchFactory;
 };
 
 export class Player extends EventEmitter<PlayerEventMap> {
@@ -597,6 +602,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
           preload: this._options.preload,
           metadata: prepared.metadata,
           requiresCrossOrigin: strategyType === "html5" && routeGraph,
+          timeStretch: this._options.timeStretch,
           signal,
         });
       };

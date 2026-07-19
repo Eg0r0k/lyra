@@ -2,6 +2,7 @@ import {
   DEFAULT_LOUDNESS_NORMALIZATION_OPTIONS,
   LoudnessNormalizationOptions,
 } from "../audio/normalization";
+import type { TimeStretchFactory } from "../strategy/ITimeStretchNode";
 
 export type PlayerState =
   | "idle"
@@ -135,6 +136,14 @@ export interface PlayerOptions {
   hlsConfig?: Partial<HLSConfig> & Record<string, unknown>;
   loudnessNormalization?: LoudnessNormalizationOptions;
   Hls?: HlsConstructor;
+  /**
+   * Inject a time-stretch plugin factory (DI, like {@link PlayerOptions.Hls} —
+   * never imported by the library). When provided AND `preservesPitch` is true,
+   * the WebAudio strategy plays through the plugin so `playbackRate` changes
+   * tempo without shifting pitch; `player.canPreservePitch` then reports `true`
+   * in webaudio mode. Absent, WebAudio resamples (pitch shifts with rate).
+   */
+  timeStretch?: TimeStretchFactory;
 }
 
 /**
@@ -152,13 +161,14 @@ export interface LoadOptions {
 export type ResolvedPlayerOptions = Required<
   Omit<
     PlayerOptions,
-    "Hls" | "loudnessNormalization" | "hlsConfig" | "audioContext"
+    "Hls" | "loudnessNormalization" | "hlsConfig" | "audioContext" | "timeStretch"
   >
 > & {
   hlsConfig: Required<HLSConfig> & Record<string, unknown>;
   loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
   audioContext?: AudioContext;
+  timeStretch?: TimeStretchFactory;
 };
 
 export const DEFAULT_OPTIONS: ResolvedPlayerOptions = {

@@ -1,4 +1,8 @@
 import { vi } from "vitest";
+import type {
+  ITimeStretchNode,
+  TimeStretchFactory,
+} from "../strategy/ITimeStretchNode";
 
 type MockParam = {
   value: number;
@@ -79,6 +83,8 @@ class MockBufferSourceNode extends MockAudioNode {
     this.onended?.();
   });
 }
+
+class MockTimeStretchNode extends MockAudioNode {}
 
 export class MockAudioContext extends EventTarget {
   public static instances: MockAudioContext[] = [];
@@ -571,6 +577,54 @@ export function getLatestBufferSourceNode(): AudioBufferSourceNode {
     throw new Error("No mock buffer source node was created");
   }
   return node as unknown as AudioBufferSourceNode;
+}
+
+export interface MockTimeStretch {
+  /** Factory to pass as `PlayerOptions.timeStretch`. */
+  factory: TimeStretchFactory;
+  /** The mock output node spliced into the graph. */
+  node: AudioNode;
+  setRate: ReturnType<typeof vi.fn>;
+  getInputPosition: ReturnType<typeof vi.fn>;
+  flush: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  /** Drive the value returned by `getInputPosition()`. */
+  setPosition(seconds: number): void;
+}
+
+/**
+ * A controllable time-stretch plugin mock (T-24). `setRate`/`flush`/`dispose`
+ * are spies; `setPosition` drives `getInputPosition()` so tests can assert that
+ * `currentTime` follows the plugin's reported position.
+ */
+export function createMockTimeStretch(): MockTimeStretch {
+  const node = new MockTimeStretchNode();
+  let position = 0;
+
+  const setRate = vi.fn((_rate: number) => undefined);
+  const getInputPosition = vi.fn(() => position);
+  const flush = vi.fn(() => undefined);
+  const dispose = vi.fn(() => undefined);
+
+  const stretcher: ITimeStretchNode = {
+    node: node as unknown as AudioNode,
+    setRate,
+    getInputPosition,
+    flush,
+    dispose,
+  };
+
+  return {
+    factory: () => Promise.resolve(stretcher),
+    node: node as unknown as AudioNode,
+    setRate,
+    getInputPosition,
+    flush,
+    dispose,
+    setPosition: (seconds: number) => {
+      position = seconds;
+    },
+  };
 }
 
 export function createArrayBuffer(length = 16): ArrayBuffer {

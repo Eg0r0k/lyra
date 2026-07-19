@@ -767,7 +767,7 @@ Priority: P1 · Type: feature · Breaking: no · Score: S · Depends on: no · C
 
 ---
 
-### [ ] T-24 — Optional time-stretch plugin API for the WebAudio strategy
+### [x] T-24 — Optional time-stretch plugin API for the WebAudio strategy
 
 Priority: P2 · Type: feature · Breaking: no (additive; plugin optional) · Score: L · Depends on: T-23, T-18, T-10 · Closes findings: F-32 (webaudio half)
 
