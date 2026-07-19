@@ -574,11 +574,6 @@ export class WebAudioStrategy
       this.emit("timeupdate", this.getCurrentTime());
     }, TIMEUPDATE_INTERVAL_MS) as unknown as number;
   }
-  /**
-   * Stops the public timeupdate emitter.
-   *
-   * @internal
-   */
   private stopTimeUpdate(): void {
     if (this._timeUpdateInterval !== null) {
       playerLogger.debug("Stopping time update loop");

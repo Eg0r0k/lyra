@@ -43,9 +43,7 @@ export class SourceManager {
 
     // Native HLS (Safari/iOS) — after MSE hls.js, before generic handlers.
     own(new NativeHlsHandler());
-    // Buffer
     own(new BufferHandler());
-    // Blob
     own(new BlobHandler());
     // URL — fallback
     own(new UrlHandler());

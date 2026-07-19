@@ -19,7 +19,6 @@ export class Logger {
         error: 'color: #991b1b; background-color: #fee2e2; padding: 2px 4px; border-radius: 3px;', 
         none: '', 
     }
-    //Singletone    
     private constructor(){}
 
     public static getInstance(): Logger {

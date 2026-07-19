@@ -1,11 +1,8 @@
-// ============ Core ============
 export { Player } from "./core/Player";
 export { EventEmitter } from "./core/EventEmitter";
 export { StateManager } from "./core/StateManager";
 export { CancellationToken, CancellationError } from "./core/CancellationToken";
 
-// ============ Playback ============
-// Types
 export type {
   IPlaybackStrategy,
   StrategyInitOptions,
@@ -16,19 +13,15 @@ export type {
   TimeStretchFactory,
 } from "./strategy/ITimeStretchNode";
 
-// Classes
 export { HTML5Strategy } from "./strategy/Html5AudioStrategy";
 export { WebAudioStrategy } from "./strategy/WebAudioStrategy";
 
-// ============ Source Handlers ============
-// Types
 export type {
   ISourceHandler,
   PreparedSource,
   SourceCapabilities,
 } from "./source/ISourceHandler";
 
-// Classes
 export { SourceManager } from "./source/SourceManager";
 export { UrlHandler } from "./source/handlers/UrlHandler";
 export { BlobHandler } from "./source/handlers/BlobHandler";
@@ -36,10 +29,8 @@ export { BufferHandler } from "./source/handlers/BufferHandler";
 export { HLSHandler } from "./source/handlers/HLSHandler";
 export { NativeHlsHandler } from "./source/handlers/NativeHlsHandler";
 
-// ============ Audio ============
 export { AudioGraph } from "./audio/AudioGraph";
 
-// ============ Types ============
 export type {
   PlayerState,
   PlaybackMode,
