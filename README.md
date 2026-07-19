@@ -270,6 +270,16 @@ const player = new Player({ mode: "webaudio", timeStretch });
 
 Recommended plugins (not bundled): **SoundTouchJS** worklet (MIT, light) and **Signalsmith Stretch** WASM (MIT, best quality/weight). **Rubber Band** WASM is GPL/commercial — avoid unless your license permits it. Without a plugin, Web Audio resamples (pitch shifts with rate).
 
+> **Position in stretcher mode leads the audible output.** With a plugin
+> attached, `player.currentTime` (and `timeupdate`) track how far the source has
+> been *consumed*, which runs ahead of what you *hear* by the plugin's internal
+> latency — typically **~50–100 ms**. This is inherent to time-stretching and is
+> not smoothed away. It's imperceptible for a progress bar, but if you sync
+> tightly to audio (waveform playheads, karaoke/lyrics), offset your visuals by
+> that latency (or measure it against `AudioContext.currentTime`). `seek()` and
+> resume re-anchor the position exactly (the plugin is flushed), so the lead
+> only accrues during continuous playback.
+
 ---
 
 ## Volume & mute

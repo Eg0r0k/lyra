@@ -83,6 +83,19 @@ export class WebAudioStrategy
   private _startTime = 0;
   private _startOffset = 0;
   private _pausedAt = 0;
+  /**
+   * Absolute position (seconds) that the plugin's relative input counter is
+   * measured from in stretcher mode (T-28). `currentTime = _stretchBaseSec +
+   * stretcher.getInputPosition()`. Rebased (and the counter flushed) on every
+   * seek and resume-from-pause; the strategy owns this truth, not the plugin.
+   */
+  private _stretchBaseSec = 0;
+  /**
+   * Last position returned in stretcher mode, for the monotonicity guard: a
+   * stale/late worklet report must not make `currentTime` jump backward within
+   * a rebase epoch (T-28). Reset to the new base on every rebase.
+   */
+  private _lastStretchPos = 0;
 
   /** Public timeupdate emitter interval (setInterval id). */
   private _timeUpdateInterval: number | null = null;
@@ -301,6 +314,16 @@ export class WebAudioStrategy
       this._startTime = this._ctx.currentTime;
       this._startOffset = offset;
 
+      if (this._stretcher) {
+        // T-28: the source restarts feeding from `offset`, so rebase the
+        // absolute position there and flush the plugin — resetting its relative
+        // counter to 0 and dropping the stale (already-stretched) latency tail
+        // so it can't bleed past the resume/seek point.
+        this._stretchBaseSec = offset;
+        this._lastStretchPos = offset;
+        this._stretcher.flush();
+      }
+
       this._sourceNode.start(0, offset);
 
       this._isPlaying = true;
@@ -384,9 +407,16 @@ export class WebAudioStrategy
 
       this._pausedAt = Math.max(0, Math.min(time, this.duration));
 
-      // Drop the plugin's buffered (already-stretched) audio so it doesn't
-      // bleed past the new position after the restart (T-24).
-      this._stretcher?.flush();
+      if (this._stretcher) {
+        // T-28: rebase the absolute position to the seek target and flush — the
+        // plugin's relative counter resets to 0 and its already-stretched buffer
+        // is dropped so it can't bleed past the new position. Covers a seek
+        // while paused (no play() follows); a seek while playing re-applies the
+        // same base in play() below.
+        this._stretchBaseSec = this._pausedAt;
+        this._lastStretchPos = this._pausedAt;
+        this._stretcher.flush();
+      }
 
       if (wasPlaying) {
         this.play().catch((err) => {
@@ -420,9 +450,13 @@ export class WebAudioStrategy
     let current: number;
 
     if (this._stretcher) {
-      // Position source of truth in stretcher mode: the source clock runs at
-      // 1.0 and doesn't reflect the stretched tempo, so read the plugin (T-24).
-      current = this._stretcher.getInputPosition();
+      // T-28: the plugin is a RELATIVE input-consumption meter (reset by
+      // flush()); the absolute position is _stretchBaseSec + its reading. Guard
+      // against a stale/late worklet report dragging the position backward
+      // within a rebase epoch (skipped while looping, where wrap is expected).
+      const raw = this._stretchBaseSec + this._stretcher.getInputPosition();
+      current = this._loop ? raw : Math.max(raw, this._lastStretchPos);
+      this._lastStretchPos = current;
     } else {
       const elapsed =
         (this._ctx.currentTime - this._startTime) * this._playbackRate;
@@ -518,14 +552,20 @@ export class WebAudioStrategy
     }
   }
   /**
-   * Resynchronizes internal playback clock after
-   * AudioContext resume or interruption recovery.
+   * Resynchronizes the internal playback clock after an AudioContext resume or
+   * interruption recovery, preventing position drift on the resampling path.
    *
    * @remarks
-   * Prevents playback position drift after
-   * suspended/resumed contexts.
+   * No-op in stretcher mode (T-28): position there is `_stretchBaseSec + the
+   * plugin's relative counter`, and the counter cannot advance while the
+   * context is suspended (no input is consumed), so it needs no re-anchor.
    */
   resyncStartTime(): void {
+    if (this._stretcher) {
+      playerLogger.debug("resyncStartTime: no-op in stretcher mode");
+      return;
+    }
+
     if (this._ctx && this._isPlaying) {
       playerLogger.debug("Resyncing playback clock after context resume");
 

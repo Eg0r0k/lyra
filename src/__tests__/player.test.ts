@@ -1638,4 +1638,81 @@ describe("Player", () => {
       warn.mockRestore();
     });
   });
+
+  describe("time-stretch position contract (T-28)", () => {
+    const withStretcher = () => {
+      const stretch = createMockTimeStretch();
+      const player = trackPlayer(
+        new Player({ mode: "webaudio", timeStretch: stretch.factory }),
+      );
+      return { stretch, player };
+    };
+
+    it("seek rebases the absolute position; the plugin counter is relative to it", async () => {
+      const { stretch, player } = withStretcher();
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.seek(30);
+      // Rebased to the seek target and the plugin flushed (counter → 0), so the
+      // position matches the synchronously-emitted seeked value — no drift.
+      expect(player.currentTime).toBe(30);
+
+      stretch.setPosition(2); // 2s consumed since the flush
+      expect(player.currentTime).toBe(32);
+    });
+
+    it("resume rebases to the paused position and flushes the plugin", async () => {
+      const { stretch, player } = withStretcher();
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      stretch.setPosition(5);
+      expect(player.currentTime).toBe(5);
+
+      player.pause();
+      expect(player.currentTime).toBe(5); // paused holds the position
+
+      await player.play(); // resume: base ← 5, plugin flushed (counter → 0)
+      expect(player.currentTime).toBe(5);
+
+      stretch.setPosition(1); // 1s consumed since the resume flush
+      expect(player.currentTime).toBe(6);
+    });
+
+    it("a rate change preserves the base and does not rebase/flush", async () => {
+      const { stretch, player } = withStretcher();
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      player.seek(20); // base ← 20
+      stretch.setPosition(5);
+      expect(player.currentTime).toBe(25);
+
+      const flushesBefore = stretch.flush.mock.calls.length;
+      player.setPlaybackRate(1.5);
+
+      // No discontinuity: base preserved, plugin not flushed by a rate change.
+      expect(stretch.flush.mock.calls.length).toBe(flushesBefore);
+      expect(player.currentTime).toBe(25);
+
+      stretch.setPosition(6);
+      expect(player.currentTime).toBe(26);
+    });
+
+    it("a stale/late plugin report never moves currentTime backward", async () => {
+      const { stretch, player } = withStretcher();
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      stretch.setPosition(10);
+      expect(player.currentTime).toBe(10);
+
+      stretch.setPosition(7); // a late/stale report — must not go backward
+      expect(player.currentTime).toBe(10);
+
+      stretch.setPosition(12); // catches up
+      expect(player.currentTime).toBe(12);
+    });
+  });
 });

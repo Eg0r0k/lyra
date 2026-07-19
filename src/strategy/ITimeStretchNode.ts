@@ -26,13 +26,30 @@ export interface ITimeStretchNode {
   setRate(rate: number): void;
 
   /**
-   * Current input position in seconds — how far playback has advanced through
-   * the source buffer. The source-of-truth for `currentTime` in stretcher mode
-   * (the strategy's `ctx.currentTime` math is bypassed).
+   * Seconds of source-side input consumed since the node was constructed or
+   * since the last {@link ITimeStretchNode.flush} — a RELATIVE meter, aligned
+   * as closely as the plugin can to the audio most recently rendered (i.e.
+   * minus internal latency). The strategy owns the absolute position: it adds
+   * its own base offset (`currentTime = base + getInputPosition()`) and calls
+   * `flush()` to reset this counter on every seek and every resume-from-pause.
+   * So a plugin MUST NOT try to track absolute/seek position itself.
+   *
+   * Report in seconds (divide an internal sample counter by the context sample
+   * rate). The value MAY lag reality by up to one worklet report interval; the
+   * strategy applies a monotonicity guard, but MUST NOT be relied on to hide a
+   * counter that jumps around. Rate-independent as a position measure: it
+   * counts input consumed, not output produced.
    */
   getInputPosition(): number;
 
-  /** Drop internally buffered audio; called on seek to avoid stale bleed. */
+  /**
+   * Drop ALL internally buffered input/output audio AND reset the
+   * {@link ITimeStretchNode.getInputPosition} counter to 0. The strategy calls
+   * this on every seek and every resume-from-pause, then restarts feeding the
+   * source from the new position — so a plugin MUST clear its output FIFO here
+   * or stale, already-stretched audio bleeds past the new position. Idempotent
+   * (a flush with nothing buffered is a no-op).
+   */
   flush(): void;
 
   /** Release the node / worklet / WASM resources. */

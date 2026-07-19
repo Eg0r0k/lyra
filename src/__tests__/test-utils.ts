@@ -729,9 +729,12 @@ export interface MockTimeStretch {
 }
 
 /**
- * A controllable time-stretch plugin mock (T-24). `setRate`/`flush`/`dispose`
+ * A controllable time-stretch plugin mock (T-24 / T-28). `setRate`/`dispose`
  * are spies; `setPosition` drives `getInputPosition()` so tests can assert that
- * `currentTime` follows the plugin's reported position.
+ * `currentTime` follows the plugin's reported position. Per the T-28 contract,
+ * `flush()` resets the relative input-position counter to 0 (modeling a real
+ * plugin dropping its buffers + counter), so `getInputPosition()` reads the
+ * consumption SINCE the last flush.
  */
 export function createMockTimeStretch(): MockTimeStretch {
   const node = new MockTimeStretchNode();
@@ -739,7 +742,9 @@ export function createMockTimeStretch(): MockTimeStretch {
 
   const setRate = vi.fn((_rate: number) => undefined);
   const getInputPosition = vi.fn(() => position);
-  const flush = vi.fn(() => undefined);
+  const flush = vi.fn(() => {
+    position = 0;
+  });
   const dispose = vi.fn(() => undefined);
 
   const stretcher: ITimeStretchNode = {
