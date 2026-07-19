@@ -1059,17 +1059,8 @@ describe("Player", () => {
         dispose: () => undefined,
       };
 
-      // Player keeps its SourceManager private; inject through it, matching the
-      // documented registerHandler pattern (named cast, not inlined).
-      const register = (p: Player, h: ISourceHandler): void => {
-        const withSM = p as unknown as {
-          _sourceManager: { registerHandler(handler: ISourceHandler): void };
-        };
-        withSM._sourceManager.registerHandler(h);
-      };
-
       const explicit = trackPlayer(new Player({ mode: "html5" }));
-      register(explicit, customHandler);
+      explicit.registerHandler(customHandler);
 
       await explicit.load("https://custom.example.com/x.mp3");
 
@@ -1078,11 +1069,77 @@ describe("Player", () => {
 
       // In auto mode, preferredStrategy still works as the selection hint.
       const auto = trackPlayer(new Player({ mode: "auto" }));
-      register(auto, customHandler);
+      auto.registerHandler(customHandler);
 
       await auto.load("https://custom.example.com/x.mp3");
 
       expect(auto.mode).toBe("webaudio");
+    });
+  });
+
+  describe("handler lifecycle: reset vs dispose (T-14)", () => {
+    const makeHandler = (
+      reset: () => void,
+      dispose: () => void,
+    ): ISourceHandler => ({
+      id: "lifecycle-test",
+      canHandle: (s) => s.url === "https://custom.example.com/x.mp3",
+      preferredStrategy: () => "any",
+      prepare: async (source) => ({
+        sourceUrl: source.url as string,
+        duration: 1,
+      }),
+      getCapabilities: () => null,
+      reset,
+      dispose,
+    });
+
+    it("resets the reused handler between loads and never disposes it per load (F-15)", async () => {
+      const reset = vi.fn();
+      const dispose = vi.fn();
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      player.registerHandler(makeHandler(reset, dispose));
+
+      await player.load("https://custom.example.com/x.mp3");
+      await player.load("https://custom.example.com/x.mp3");
+
+      // Second load's cleanup reset the reused handler; dispose is terminal only.
+      expect(reset).toHaveBeenCalledTimes(1);
+      expect(dispose).not.toHaveBeenCalled();
+    });
+
+    it("disposes each handler exactly once on player.dispose()", async () => {
+      const reset = vi.fn();
+      const dispose = vi.fn();
+      const player = new Player({ mode: "html5" });
+      player.registerHandler(makeHandler(reset, dispose));
+
+      await player.load("https://custom.example.com/x.mp3");
+      await player.dispose();
+
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("registerHandler makes a custom handler reachable through the player (F-37)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      const prepare = vi.fn(async (source: { url?: string }) => ({
+        sourceUrl: source.url as string,
+        duration: 1,
+      }));
+
+      player.registerHandler({
+        id: "reachable-test",
+        canHandle: (s) => s.url === "https://custom.example.com/x.mp3",
+        preferredStrategy: () => "any",
+        prepare: prepare as ISourceHandler["prepare"],
+        getCapabilities: () => null,
+        dispose: () => undefined,
+      });
+
+      await player.load("https://custom.example.com/x.mp3");
+
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(player.state).toBe("ready");
     });
   });
 });

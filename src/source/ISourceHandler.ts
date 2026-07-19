@@ -30,6 +30,12 @@ export interface SourceCapabilities {
   onRuntimeError?: (callback: (error: PlayerError) => void) => void;
 }
 
+/**
+ * A source handler is **constructed once** (per {@link SourceManager}), then:
+ * `prepare` runs per load, {@link ISourceHandler.reset} runs between loads to
+ * release the per-load session, and {@link ISourceHandler.dispose} runs once at
+ * the end (terminal). `dispose()` is invoked only by `SourceManager.dispose()`.
+ */
 export interface ISourceHandler {
   readonly id: string;
 
@@ -57,5 +63,13 @@ export interface ISourceHandler {
   ): Promise<PreparedSource>;
 
   getCapabilities(): SourceCapabilities | null;
+  /**
+   * Release the current per-load session (e.g. an hls.js instance, timers)
+   * WITHOUT tearing the handler down — it will be reused for the next load.
+   * Called by the player after each load. Optional: handlers with no per-load
+   * state omit it. Distinct from {@link dispose}, which is terminal.
+   */
+  reset?(): void;
+  /** Terminal teardown. Invoked once, only by `SourceManager.dispose()`. */
   dispose(): void;
 }

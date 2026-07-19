@@ -120,7 +120,7 @@ export class HLSHandler implements ISourceHandler {
       );
     }
 
-    this.cleanup();
+    this.reset();
 
     this._hls = new this._Hls({
       maxBufferLength: this._config.maxBufferLength,
@@ -147,7 +147,7 @@ export class HLSHandler implements ISourceHandler {
 
       const onAbort = () => {
         reject(new DOMException("Aborted", "AbortError"));
-        this.cleanup();
+        this.reset();
       };
       signal.addEventListener("abort", onAbort);
 
@@ -208,7 +208,7 @@ export class HLSHandler implements ISourceHandler {
 
         if (!resolved) {
           signal.removeEventListener("abort", onAbort);
-          this.cleanup();
+          this.reset();
           reject(this.toPlayerError(err));
           return;
         }
@@ -320,11 +320,15 @@ export class HLSHandler implements ISourceHandler {
       data,
     );
     const notify = this._onRuntimeError;
-    this.cleanup();
+    this.reset();
     notify?.(error);
   }
 
-  private cleanup(): void {
+  /**
+   * Per-load teardown (F-14): destroy the current hls.js session + timers so
+   * the singleton handler can be reused for the next load. Keeps `_Hls`.
+   */
+  reset(): void {
     if (this._backoffTimer !== null) {
       clearTimeout(this._backoffTimer);
       this._backoffTimer = null;
@@ -346,6 +350,7 @@ export class HLSHandler implements ISourceHandler {
   }
 
   dispose(): void {
-    this.cleanup();
+    this.reset();
+    this._Hls = null;
   }
 }

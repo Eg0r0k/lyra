@@ -134,6 +134,17 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
   }
 
+  /**
+   * Register a custom {@link ISourceHandler}. It is prepended (highest
+   * priority), so its `canHandle()` is consulted before the built-ins. The
+   * handler follows the lifecycle documented on {@link ISourceHandler}:
+   * constructed by the caller, `prepare` per load, `reset` between loads,
+   * `dispose` once when the player is disposed.
+   */
+  registerHandler(handler: ISourceHandler): void {
+    this._sourceManager.registerHandler(handler);
+  }
+
   get state(): PlayerState {
     return this._stateManager.state;
   }
@@ -1193,7 +1204,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this._graphSourceNode = null;
 
-    this._currentHandler?.dispose();
+    // Per-load teardown only: the handler is a SourceManager singleton reused
+    // on the next load. dispose() is terminal and belongs to SourceManager
+    // (F-15). Optional — custom handlers without per-load state omit reset().
+    this._currentHandler?.reset?.();
     this._currentHandler = null;
 
     this._sourceManager.clearActiveHandler();

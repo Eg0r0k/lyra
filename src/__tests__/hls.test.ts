@@ -328,4 +328,27 @@ describe("HLS", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(player.state).toBe("error");
   });
+
+  it("reuses the handler across loads, giving each a fresh hls session (T-14/F-15)", async () => {
+    player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+    expect(MockHls.instances).toHaveLength(1);
+    const first = MockHls.instances[0];
+    const destroySpy = vi.spyOn(first, "destroy");
+
+    // Second load on the SAME player: the handler is reused (reset, not
+    // disposed), so the prior hls session is destroyed and a fresh one created.
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+
+    expect(destroySpy).toHaveBeenCalledTimes(1); // old session torn down on reset
+    expect(MockHls.instances).toHaveLength(2); // fresh session for load 2
+    expect(player.state).toBe("ready"); // handler still usable (not disposed)
+  });
 });
