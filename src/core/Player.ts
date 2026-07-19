@@ -228,8 +228,11 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
   get audioContext(): AudioContext {
     if (!this._ctx) {
+      const win = window as typeof window & {
+        webkitAudioContext?: typeof AudioContext;
+      };
       const WebAudioCtx: typeof AudioContext =
-        window.AudioContext ?? (window as any).webkitAudioContext;
+        window.AudioContext ?? win.webkitAudioContext;
 
       this._ctx = new WebAudioCtx({
         latencyHint: this._options.latencyHint,
@@ -371,6 +374,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
             this._isAudioUnlocked = true;
             resolve();
           } else {
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- err is the PlayerError timeout or the caught start() reason, propagated verbatim
             reject(err);
           }
         };

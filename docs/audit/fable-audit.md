@@ -657,13 +657,23 @@ Priority: P2 · Type: feature · Breaking: no · Score: S · Depends on: T-11 ·
 
 ### [ ] T-20 — Reuse the HTMLAudioElement/MediaElementSourceNode pair across loads
 
-> **AMENDED — see amendments.md: DEFERRED, excluded from this pass. Do not implement.**
+> **RISK ACCEPTED — not implemented (see amendments.md + progress.md).**
 
 Priority: P2 · Type: perf · Breaking: no · Score: M · Depends on: T-04, T-14 · Closes findings: F-24
 
 **Problem.** Every load constructs a new Audio() and (when routed) a new MediaElementAudioSourceNode; long playlist sessions accumulate elements/nodes (Chrome historically retains MediaElementSource-attached elements aggressively).
 
-*(Original spec retained for the future iteration; see the audit history. Deferred per amendments.md — the shared element captured in turn by HTML5 strategy, hls.js, and native HLS is a residual-state bug magnet; revisit after T-03/T-05 have settled.)*
+*(Original spec retained for a possible future iteration.)*
+
+**RISK ACCEPTED (2026-07-19).** Not deferred-pending-deps (its deps T-03/T-05
+are done) — declined on design grounds: a single shared `HTMLAudioElement`
+captured in turn by the HTML5 strategy, hls.js, and native HLS is a
+residual-state bug magnet (leftover `src`, listeners, `preservesPitch`/rate,
+crossOrigin, MediaElementSourceNode pinned once-per-element). F-24 is a
+low-to-medium leak with **no measured profile** to justify that risk. **Review
+condition:** revisit only if a reproducible report of growing memory use across
+long playlists appears (then measure before building). Recorded so the opt-out
+is a conscious decision, not an oversight.*
 
 ---
 

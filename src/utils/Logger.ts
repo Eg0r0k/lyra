@@ -38,28 +38,28 @@ export class Logger {
     }
 
     
-    public debug(message:string, ...args:any[]):void{
+    public debug(message:string, ...args:unknown[]):void{
         if(this.shouldLog('debug')){
             const tag = '[Player:DEBUG]';
             console.debug(`%c${tag}`, this.styles.debug, message, ...args);
         }
     }
 
-    public info(message:string, ...args:any[]):void{
+    public info(message:string, ...args:unknown[]):void{
         if(this.shouldLog('info')){
             const tag = '[Player:INFO]';
             console.info(`%c${tag}`, this.styles.info, message, ...args);
         }
     }
 
-    public warn(message: string, ...args: any[]): void {
+    public warn(message: string, ...args: unknown[]): void {
         if (this.shouldLog('warn')) {
             const tag = '[Player:WARN]';
             console.warn(`%c${tag}`, this.styles.warn, message, ...args);
         }
     }
 
-    public error(message: string, ...args: any[]): void {
+    public error(message: string, ...args: unknown[]): void {
         if (this.shouldLog('error')) {
             const tag = '[Player:ERROR]';
             console.error(`%c${tag}`, this.styles.error, message, ...args);

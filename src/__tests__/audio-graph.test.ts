@@ -148,7 +148,7 @@ describe("AudioGraph", () => {
     graph.setVolumeImmediate(0.5);
     expect(volumeGain.gain.value).toBe(0.5);
 
-    graph.fadeTo(0.8, 1);
+    void graph.fadeTo(0.8, 1);
     await vi.advanceTimersByTimeAsync(300);
     graph.cancelFade();
 
@@ -171,7 +171,7 @@ describe("AudioGraph", () => {
     await player.play();
 
     for (let i = 0; i < 5; i++) {
-      player.fadeOut(0.5);
+      void player.fadeOut(0.5);
       await vi.advanceTimersByTimeAsync(100);
       player.cancelFade();
     }

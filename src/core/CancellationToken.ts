@@ -55,6 +55,7 @@ export class CancellationToken {
         .catch((err) =>
           done(() => {
             this.signal.removeEventListener("abort", onAbort);
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- propagate the upstream rejection reason verbatim
             reject(err);
           }),
         );

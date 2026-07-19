@@ -110,8 +110,11 @@ export class PlayerError extends Error {
     super(message);
     this.name = "PlayerError";
 
-    if (typeof (Error as any).captureStackTrace === "function") {
-      (Error as any).captureStackTrace(this, PlayerError);
+    const errorCtor = Error as {
+      captureStackTrace?: (target: object, ctor: unknown) => void;
+    };
+    if (typeof errorCtor.captureStackTrace === "function") {
+      errorCtor.captureStackTrace(this, PlayerError);
     }
   }
 
@@ -138,14 +141,15 @@ export class PlayerError extends Error {
     } else if (typeof error === "string") {
       message = error;
     } else if (typeof error === "object" && error !== null) {
-      if ("message" in error) {
-        message = String((error as any).message);
+      const maybeMessage = (error as { message?: unknown }).message;
+      if (typeof maybeMessage === "string") {
+        message = maybeMessage;
       } else {
         try {
           const json = JSON.stringify(error);
-          message = json === "{}" ? String(error) : json;
+          message = json && json !== "{}" ? json : "[object]";
         } catch {
-          message = String(error);
+          message = "[unserializable object]";
         }
       }
     }

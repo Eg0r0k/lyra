@@ -28,7 +28,7 @@ export class EventEmitter<
     callback: Callback<TEventMap[K]>,
   ): Unsubscribe {
     const wrapper = ((payload: TEventMap[K]) => {
-      this.off(event, wrapper as Callback<TEventMap[K]>);
+      this.off(event, wrapper);
       (callback as (p: TEventMap[K]) => void)(payload);
     }) as Callback<TEventMap[K]>;
 

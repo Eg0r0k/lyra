@@ -84,13 +84,9 @@ export class AudioGraph {
       this._analyser.maxDecibels = aOpts.maxDecibels;
     }
 
-    this._freqDataArray = new Uint8Array(
-      this._analyser.frequencyBinCount,
-    ) as Uint8Array<ArrayBuffer>;
+    this._freqDataArray = new Uint8Array(this._analyser.frequencyBinCount);
 
-    this._timeDataArray = new Uint8Array(
-      this._analyser.fftSize,
-    ) as Uint8Array<ArrayBuffer>;
+    this._timeDataArray = new Uint8Array(this._analyser.fftSize);
 
     this.createEQFilters();
     this.connectChain();
