@@ -836,16 +836,24 @@ export class Player extends EventEmitter<PlayerEventMap> {
         Math.max(range.start, Math.min(time, range.end)),
       );
     } else {
-      safeTime = TimeSeconds(Math.max(0, Math.min(time, this.duration)));
+      const duration = this.duration;
+      // Skip the upper clamp when duration is unknown (0/NaN) so an early seek
+      // isn't forced to 0 (F-28); the lower clamp at 0 always applies.
+      const lower = Math.max(0, time);
+      safeTime = TimeSeconds(
+        Number.isFinite(duration) && duration > 0
+          ? Math.min(lower, duration)
+          : lower,
+      );
     }
 
     playerLogger.debug("Seeking to:", safeTime);
 
     this.emit("seeking", safeTime);
 
+    // seeked is emitted from the strategy's "seeked" event (html5: native/async;
+    // webaudio: synchronous) via bindStrategyEvents — not synchronously here.
     this._currentStrategy.seek(safeTime);
-
-    this.emit("seeked", safeTime);
   }
 
   seekPercent(percent: number): void {
@@ -1257,6 +1265,10 @@ export class Player extends EventEmitter<PlayerEventMap> {
         duration,
         progress,
       });
+    });
+
+    this._currentStrategy.on("seeked", (time) => {
+      this.emit("seeked", time);
     });
 
     this._currentStrategy.on("durationchange", (duration) => {

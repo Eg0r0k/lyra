@@ -1239,4 +1239,68 @@ describe("Player", () => {
       warn.mockRestore();
     });
   });
+
+  describe("seek/timeupdate parity (T-18)", () => {
+    it("webaudio seek emits seeked with no pause/play flicker (F-22)", async () => {
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      const events: string[] = [];
+      player.on("pause", () => events.push("pause"));
+      player.on("play", () => events.push("play"));
+      player.on("seeked", () => events.push("seeked"));
+
+      player.seek(1);
+
+      // The internal pause/play restart is suppressed — a seek is not a
+      // pause/resume. Only seeked surfaces (seeking is asserted separately).
+      expect(events).toEqual(["seeked"]);
+    });
+
+    it("html5 seeked fires from the native element event, not synchronously (F-28)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+
+      const seeked = vi.fn();
+      player.on("seeked", seeked);
+
+      player.seek(50);
+      expect(seeked).not.toHaveBeenCalled(); // not emitted synchronously
+
+      getLatestAudioElement().dispatchEvent(new Event("seeked"));
+      expect(seeked).toHaveBeenCalledWith(50); // driven by the native event
+    });
+
+    it("does not clamp a seek to 0 when duration is unknown (F-28)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+
+      const el = getLatestAudioElement();
+      el.duration = NaN; // metadata not yet known
+
+      player.seek(30);
+      expect(el.currentTime).toBe(30); // lower clamp only, not forced to 0
+    });
+
+    it("webaudio timeupdate ticks via a ~250ms timer, not rAF (F-28)", async () => {
+      vi.useFakeTimers();
+      try {
+        const player = trackPlayer(new Player({ mode: "webaudio" }));
+        await player.load({ data: createArrayBuffer() });
+        await player.play();
+
+        const tu = vi.fn();
+        player.on("timeupdate", tu);
+
+        await vi.advanceTimersByTimeAsync(250);
+        expect(tu).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(500);
+        expect(tu.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

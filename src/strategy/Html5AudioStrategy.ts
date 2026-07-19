@@ -102,6 +102,9 @@ export class HTML5Strategy
   private _onTimeUpdate = () => {
     this.emit("timeupdate", TimeSeconds(this._audio.currentTime));
   };
+  private _onSeeked = () => {
+    this.emit("seeked", TimeSeconds(this._audio.currentTime));
+  };
   private _onDurationChange = () => {
     this.emit("durationchange", TimeSeconds(this._audio.duration));
   };
@@ -256,6 +259,7 @@ export class HTML5Strategy
     this._audio.addEventListener("playing", this._onPlaying);
     this._audio.addEventListener("ended", this._onEnded);
     this._audio.addEventListener("timeupdate", this._onTimeUpdate);
+    this._audio.addEventListener("seeked", this._onSeeked);
     this._audio.addEventListener("durationchange", this._onDurationChange);
   }
 
@@ -416,6 +420,7 @@ export class HTML5Strategy
     this._audio.removeEventListener("playing", this._onPlaying);
     this._audio.removeEventListener("ended", this._onEnded);
     this._audio.removeEventListener("timeupdate", this._onTimeUpdate);
+    this._audio.removeEventListener("seeked", this._onSeeked);
     this._audio.removeEventListener("durationchange", this._onDurationChange);
     this._audio.removeEventListener("error", this._onError);
     this._sourceNode?.disconnect();

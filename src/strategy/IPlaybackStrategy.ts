@@ -8,6 +8,7 @@ export type PlaybackStrategyEvents = {
   pause: void;
   ended: void;
   timeupdate: TimeSeconds;
+  seeked: TimeSeconds;
   durationchange: TimeSeconds;
   waiting: void;
   playing: void;

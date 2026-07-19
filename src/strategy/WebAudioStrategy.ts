@@ -9,6 +9,14 @@ import { PlayerError, PlayerErrorCode } from "../types/events";
 import { playerLogger } from "../utils/Logger";
 
 /**
+ * Public `timeupdate` cadence (~4/s), aligned with native HTML5 media. Uses a
+ * timer (not rAF) so background tabs keep updating — throttled by the browser
+ * to >=1 s there, acceptable and better than a frozen rAF (F-28). Position is
+ * read from `ctx.currentTime` on demand, so values stay correct at any cadence.
+ */
+const TIMEUPDATE_INTERVAL_MS = 250;
+
+/**
  * Web Audio API playback strategy using decoded AudioBuffers.
  *
  * This strategy is optimized for:
@@ -69,7 +77,13 @@ export class WebAudioStrategy
   private _startOffset = 0;
   private _pausedAt = 0;
 
-  private _rafId: number | null = null;
+  /** Public timeupdate emitter interval (setInterval id). */
+  private _timeUpdateInterval: number | null = null;
+  /**
+   * True during the internal pause/play restart of {@link WebAudioStrategy.seek}
+   * so those transitions don't leak spurious pause/play events (F-22).
+   */
+  private _seeking = false;
   /**
    * Last stable playback position.
    *
@@ -239,7 +253,9 @@ export class WebAudioStrategy
 
       this.startTimeUpdate();
 
-      this.emit("play");
+      if (!this._seeking) {
+        this.emit("play");
+      }
 
       playerLogger.debug("Playback started successfully");
     } catch (error) {
@@ -282,7 +298,9 @@ export class WebAudioStrategy
 
     this.stopTimeUpdate();
 
-    this.emit("pause");
+    if (!this._seeking) {
+      this.emit("pause");
+    }
   }
 
   stop(): void {
@@ -298,20 +316,33 @@ export class WebAudioStrategy
 
     playerLogger.debug("Seeking", `target=${time}`);
 
-    if (wasPlaying) {
-      this.pause();
+    // Suppress the pause/play events of the internal restart — a seek is not a
+    // pause/resume (parity with html5, which never emits them on seek) (F-22).
+    this._seeking = true;
+    try {
+      if (wasPlaying) {
+        this.pause();
+      }
+
+      this._pausedAt = Math.max(0, Math.min(time, this.duration));
+
+      if (wasPlaying) {
+        this.play().catch((err) => {
+          playerLogger.error("Seek replay failed", err);
+
+          this.emit(
+            "error",
+            err instanceof Error ? err : new Error(String(err)),
+          );
+        });
+      }
+    } finally {
+      this._seeking = false;
     }
 
-    this._pausedAt = Math.max(0, Math.min(time, this.duration));
-
-    if (wasPlaying) {
-      this.play().catch((err) => {
-        playerLogger.error("Seek replay failed", err);
-
-        this.emit("error", err instanceof Error ? err : new Error(String(err)));
-      });
-    }
-
+    // WebAudio seek is synchronous → emit seeked now (html5 emits from its
+    // native seeked event instead). seeking stays the player's concern.
+    this.emit("seeked", TimeSeconds(this._pausedAt));
     this.emit("timeupdate", TimeSeconds(this._pausedAt));
   }
 
@@ -454,37 +485,37 @@ export class WebAudioStrategy
     return this._gainNode;
   }
   /**
-   * Starts requestAnimationFrame playback time updates.
+   * Starts the public timeupdate emitter (timer-based, ~4/s). Position is read
+   * from `ctx.currentTime` on demand, so background-tab throttling coarsens the
+   * cadence but never the values; end-of-track is `onended`-driven, so this
+   * cadence does not affect gapless transitions (F-28).
    *
    * @internal
    */
   private startTimeUpdate(): void {
     playerLogger.debug("Starting time update loop");
 
-    const update = () => {
+    this.stopTimeUpdate();
+    this._timeUpdateInterval = setInterval(() => {
       if (!this._isPlaying) {
         return;
       }
 
       this.emit("timeupdate", this.getCurrentTime());
-
-      this._rafId = requestAnimationFrame(update);
-    };
-
-    this._rafId = requestAnimationFrame(update);
+    }, TIMEUPDATE_INTERVAL_MS) as unknown as number;
   }
   /**
-   * Stops requestAnimationFrame playback updates.
+   * Stops the public timeupdate emitter.
    *
    * @internal
    */
   private stopTimeUpdate(): void {
-    if (this._rafId !== null) {
+    if (this._timeUpdateInterval !== null) {
       playerLogger.debug("Stopping time update loop");
 
-      cancelAnimationFrame(this._rafId);
+      clearInterval(this._timeUpdateInterval);
 
-      this._rafId = null;
+      this._timeUpdateInterval = null;
     }
   }
   /**
@@ -497,6 +528,7 @@ export class WebAudioStrategy
     playerLogger.debug("Disposing WebAudioStrategy");
 
     this.stop();
+    this.stopTimeUpdate();
 
     this._gainNode?.disconnect();
 
