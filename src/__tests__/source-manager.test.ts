@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { SourceManager } from "../source/SourceManager";
+import { UrlHandler } from "../source/handlers/UrlHandler";
 import type { ISourceHandler, SourceCapabilities } from "../source/ISourceHandler";
 import type { AudioSource, HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
@@ -183,22 +184,32 @@ describe("SourceManager", () => {
     expect(manager.getActiveCapabilities()).toBeNull();
   });
 
-  it("disposes registered handlers and clears manager state", () => {
-    const manager = new SourceManager();
-    const first = createMockHandler({ id: "first" });
-    const second = createMockHandler({ id: "second" });
+  it("disposes built-in handlers but not externally registered ones, and clears state", () => {
+    const disposeSpy = vi.spyOn(UrlHandler.prototype, "dispose");
+    try {
+      const manager = new SourceManager();
+      const first = createMockHandler({ id: "first" });
+      const second = createMockHandler({ id: "second" });
 
-    manager.registerHandler(first);
-    manager.registerHandler(second);
-    manager.setActiveHandler(first);
+      manager.registerHandler(first);
+      manager.registerHandler(second);
+      manager.setActiveHandler(first);
 
-    manager.dispose();
+      manager.dispose();
 
-    expect(first.dispose).toHaveBeenCalledTimes(1);
-    expect(second.dispose).toHaveBeenCalledTimes(1);
-    expect(manager.getActiveCapabilities()).toBeNull();
-    expect(manager.recommendStrategy({ url: "https://cdn.example.com/song.mp3" })).toBe(
-      "html5",
-    );
+      // Built-in handlers (manager-owned) are disposed...
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      // ...but externally registered handlers are caller-owned (survive dispose).
+      expect(first.dispose).not.toHaveBeenCalled();
+      expect(second.dispose).not.toHaveBeenCalled();
+
+      // Manager state is still cleared regardless of ownership.
+      expect(manager.getActiveCapabilities()).toBeNull();
+      expect(
+        manager.recommendStrategy({ url: "https://cdn.example.com/song.mp3" }),
+      ).toBe("html5");
+    } finally {
+      disposeSpy.mockRestore();
+    }
   });
 });

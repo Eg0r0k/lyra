@@ -31,10 +31,11 @@ export interface SourceCapabilities {
 }
 
 /**
- * A source handler is **constructed once** (per {@link SourceManager}), then:
- * `prepare` runs per load, {@link ISourceHandler.reset} runs between loads to
- * release the per-load session, and {@link ISourceHandler.dispose} runs once at
- * the end (terminal). `dispose()` is invoked only by `SourceManager.dispose()`.
+ * A source handler is **constructed once**, then: `prepare` runs per load,
+ * {@link ISourceHandler.reset} runs between loads to release the per-load
+ * session, and {@link ISourceHandler.dispose} runs once at the end (terminal).
+ * For built-in handlers the owning `SourceManager` calls `dispose()`; a handler
+ * added via `Player.registerHandler` is caller-owned and the caller disposes it.
  */
 export interface ISourceHandler {
   readonly id: string;
@@ -70,6 +71,10 @@ export interface ISourceHandler {
    * state omit it. Distinct from {@link dispose}, which is terminal.
    */
   reset?(): void;
-  /** Terminal teardown. Invoked once, only by `SourceManager.dispose()`. */
+  /**
+   * Terminal teardown, invoked once. For built-in handlers this is called by
+   * `SourceManager.dispose()`; for caller-registered handlers the caller
+   * invokes it (the player never disposes a registered handler).
+   */
   dispose(): void;
 }

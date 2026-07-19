@@ -1108,7 +1108,7 @@ describe("Player", () => {
       expect(dispose).not.toHaveBeenCalled();
     });
 
-    it("disposes each handler exactly once on player.dispose()", async () => {
+    it("never disposes a registered handler; the caller owns it (F-14 ownership)", async () => {
       const reset = vi.fn();
       const dispose = vi.fn();
       const player = new Player({ mode: "html5" });
@@ -1117,7 +1117,28 @@ describe("Player", () => {
       await player.load("https://custom.example.com/x.mp3");
       await player.dispose();
 
-      expect(dispose).toHaveBeenCalledTimes(1);
+      // Registered handlers are caller-owned — the player disposes only its
+      // own built-ins, so the consumer's object survives player.dispose().
+      expect(dispose).not.toHaveBeenCalled();
+    });
+
+    it("a handler shared across two players survives disposing the first", async () => {
+      const reset = vi.fn();
+      const dispose = vi.fn();
+      const shared = makeHandler(reset, dispose);
+
+      const first = new Player({ mode: "html5" });
+      const second = trackPlayer(new Player({ mode: "html5" }));
+      first.registerHandler(shared);
+      second.registerHandler(shared);
+
+      await first.load("https://custom.example.com/x.mp3");
+      await first.dispose();
+
+      // The shared handler was not disposed, so the second player still uses it.
+      expect(dispose).not.toHaveBeenCalled();
+      await second.load("https://custom.example.com/x.mp3");
+      expect(second.state).toBe("ready");
     });
 
     it("registerHandler makes a custom handler reachable through the player (F-37)", async () => {

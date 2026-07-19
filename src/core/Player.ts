@@ -135,11 +135,26 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * Register a custom {@link ISourceHandler}. It is prepended (highest
-   * priority), so its `canHandle()` is consulted before the built-ins. The
-   * handler follows the lifecycle documented on {@link ISourceHandler}:
-   * constructed by the caller, `prepare` per load, `reset` between loads,
-   * `dispose` once when the player is disposed.
+   * Register a custom {@link ISourceHandler}.
+   *
+   * **Priority (override).** The handler is prepended, so its `canHandle()` is
+   * consulted before every built-in — including HLS. This is intentional
+   * override semantics: a handler whose `canHandle` is broad (e.g. any URL)
+   * will intercept HLS and everything else. Keep `canHandle` as narrow as the
+   * sources you actually mean to override.
+   *
+   * **Ownership.** You retain ownership: the player never calls `dispose()` on
+   * a registered handler (only its own built-ins), so the same instance may be
+   * reused across players and outlives `player.dispose()`. Dispose it yourself.
+   * The player still calls `reset?.()` on it between loads while it is the
+   * active handler, so do not share a *stateful* handler across players that
+   * load concurrently.
+   *
+   * **No removal.** Registration is additive and setup-time; there is no
+   * `unregisterHandler`. To change handling, build a new player.
+   *
+   * Lifecycle (see {@link ISourceHandler}): constructed by you, `prepare` per
+   * load, `reset` between loads, `dispose` by you when you are done.
    */
   registerHandler(handler: ISourceHandler): void {
     this._sourceManager.registerHandler(handler);

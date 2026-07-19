@@ -19,6 +19,12 @@ export class SourceManager {
   private _handlers: ISourceHandler[] = [];
   private _activeHandler: ISourceHandler | null = null;
   private _options: SourceManagerOptions;
+  /**
+   * Handlers the manager constructed itself (the built-ins). Only these are
+   * disposed by {@link SourceManager.dispose}; externally registered handlers
+   * are owned by the caller.
+   */
+  private readonly _ownedHandlers = new Set<ISourceHandler>();
 
   constructor(options: SourceManagerOptions = {}) {
     this._options = options;
@@ -26,27 +32,31 @@ export class SourceManager {
   }
 
   private registerDefaultHandlers(): void {
+    const own = (handler: ISourceHandler): void => {
+      this._handlers.push(handler);
+      this._ownedHandlers.add(handler);
+    };
+
     if (this._options.Hls && HLSHandler.isSupported(this._options.Hls)) {
-      this._handlers.push(
-        new HLSHandler(this._options.hlsConfig, this._options.Hls),
-      );
-    } else {
-      //noop
+      own(new HLSHandler(this._options.hlsConfig, this._options.Hls));
     }
 
     // Native HLS (Safari/iOS) — after MSE hls.js, before generic handlers.
-    this._handlers.push(new NativeHlsHandler());
-
+    own(new NativeHlsHandler());
     // Buffer
-    this._handlers.push(new BufferHandler());
-
+    own(new BufferHandler());
     // Blob
-    this._handlers.push(new BlobHandler());
-
+    own(new BlobHandler());
     // URL — fallback
-    this._handlers.push(new UrlHandler());
+    own(new UrlHandler());
   }
 
+  /**
+   * Register an externally-owned handler at the front of the chain (highest
+   * priority — its `canHandle` is consulted before every built-in, including
+   * HLS). The caller retains ownership: it is NOT disposed by
+   * {@link SourceManager.dispose}. There is no removal API.
+   */
   registerHandler(handler: ISourceHandler): void {
     this._handlers.unshift(handler);
   }
@@ -114,9 +124,14 @@ export class SourceManager {
 
   dispose(): void {
     for (const handler of this._handlers) {
-      handler.dispose();
+      // Externally registered handlers are caller-owned — never disposed here,
+      // so one handler shared across players survives the first dispose.
+      if (this._ownedHandlers.has(handler)) {
+        handler.dispose();
+      }
     }
     this._handlers = [];
+    this._ownedHandlers.clear();
     this._activeHandler = null;
   }
 }
