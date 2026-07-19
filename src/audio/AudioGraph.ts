@@ -116,6 +116,16 @@ export class AudioGraph {
     return this._fadeTimer !== null;
   }
 
+  /**
+   * Current fade multiplier (0..1), applied on top of user volume. `fadeOut()`
+   * without a subsequent pause/stop leaves this at 0 while playback continues,
+   * so raising volume alone will not restore sound — call `fadeIn()`. See the
+   * fades section of the README.
+   */
+  get fadeMultiplier(): number {
+    return this._outputGain.gain.value;
+  }
+
   get eqEnabled(): boolean {
     return this._eqEnabled;
   }

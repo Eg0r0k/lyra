@@ -933,5 +933,29 @@ describe("Player", () => {
       await player.unlockAudio();
       expect(recreated.createdBufferSources).toHaveLength(1);
     });
+
+    it("does not leak statechange listeners across repeated failed unlocks", async () => {
+      vi.useFakeTimers();
+      try {
+        const player = trackPlayer(Player.auto());
+        const ctx = player.audioContext as unknown as MockAudioContext;
+        ctx.setState("suspended");
+        MockAudioContext.resumeKeepsState = true;
+
+        for (let i = 0; i < 3; i++) {
+          const attempt = player.unlockAudio();
+          const rejection = expect(attempt).rejects.toMatchObject({
+            code: PlayerErrorCode.PLAYBACK_NOT_ALLOWED,
+          });
+          await vi.advanceTimersByTimeAsync(2_000);
+          await rejection;
+        }
+
+        // Every settle path (incl. timeout) removes its statechange listener.
+        expect(ctx.statechangeListenerCount).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

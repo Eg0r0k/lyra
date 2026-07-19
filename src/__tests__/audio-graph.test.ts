@@ -307,6 +307,36 @@ describe("AudioGraph", () => {
     expect(volumeGain.gain.value).toBe(0.7); // volume untouched
   });
 
+  it("fadeOut (no pause/stop) leaves the fade multiplier at 0; volume alone cannot restore sound (mirror of F-13)", async () => {
+    player = new Player({ mode: "html5", volume: 0.6 });
+    await player.load("https://cdn.example.com/song.mp3");
+    await player.play();
+
+    await player.fadeOut(0); // instant fade to silence, playback continues
+
+    const volumeGain = getLatestGainNode() as unknown as { gain: { value: number } };
+    const fadeGain = getFadeGainNode() as unknown as { gain: { value: number } };
+
+    // Faded out without pause/stop: the fade multiplier stays 0 (by design —
+    // multiplier semantics, T-10) and is observable via fadeMultiplier.
+    expect(player.state).toBe("playing");
+    expect(player.fadeMultiplier).toBe(0);
+    expect(fadeGain.gain.value).toBe(0);
+
+    // Raising volume moves volumeGain and player.volume, but effective output
+    // (fade x volume) stays silent — the mirror of the F-13 class.
+    player.setVolume(0.8);
+    expect(player.volume).toBe(0.8);
+    expect(volumeGain.gain.value).toBe(0.8);
+    expect(fadeGain.gain.value).toBe(0);
+    expect(player.fadeMultiplier).toBe(0);
+
+    // fadeIn is the documented recovery: it ramps the multiplier back to full.
+    await player.fadeIn(0);
+    expect(player.fadeMultiplier).toBe(1);
+    expect(fadeGain.gain.value).toBe(1);
+  });
+
   it("un-routed html5 (webAudioRouting:'never') applies volume to the element", async () => {
     player = new Player({ mode: "html5", webAudioRouting: "never", volume: 0.5 });
     await player.load("https://cdn.example.com/song.mp3");

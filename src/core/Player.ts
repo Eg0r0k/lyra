@@ -174,6 +174,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._audioGraph?.isFading ?? false;
   }
 
+  /**
+   * Current fade multiplier (0..1) applied on top of {@link Player.volume}.
+   * After `fadeOut()` (without pause/stop) this stays 0 while playback
+   * continues; raising volume will not restore sound — call `fadeIn()`.
+   * Returns 1 when no graph is routed.
+   */
+  get fadeMultiplier(): number {
+    return this._audioGraph?.fadeMultiplier ?? 1;
+  }
+
   get mode(): PlaybackMode {
     if (!this._currentStrategy) return "auto";
     return this._currentStrategy.id;

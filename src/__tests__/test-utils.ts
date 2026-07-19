@@ -109,10 +109,38 @@ export class MockAudioContext extends EventTarget {
     new MockAudioNode() as unknown as AudioDestinationNode;
   public readonly createdGains: MockGainNode[] = [];
   public readonly createdBufferSources: MockBufferSourceNode[] = [];
+  private readonly _statechangeListeners = new Set<EventListenerOrEventListenerObject>();
 
   constructor(_options?: AudioContextOptions) {
     super();
     MockAudioContext.instances.push(this);
+  }
+
+  /** Number of "statechange" listeners registered via addEventListener. */
+  public get statechangeListenerCount(): number {
+    return this._statechangeListeners.size;
+  }
+
+  public addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    if (type === "statechange" && listener) {
+      this._statechangeListeners.add(listener);
+    }
+    super.addEventListener(type, listener, options);
+  }
+
+  public removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    if (type === "statechange" && listener) {
+      this._statechangeListeners.delete(listener);
+    }
+    super.removeEventListener(type, listener, options);
   }
 
   public setState(newState: AudioContextState): void {
