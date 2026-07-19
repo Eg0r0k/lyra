@@ -454,14 +454,18 @@ export class Player extends EventEmitter<PlayerEventMap> {
           ? this._sourceManager.recommendStrategy(normalized)
           : this._options.mode;
 
-      const preferred = handler.preferredStrategy();
+      // Explicit mode is honored; only a handler's HARD requirement
+      // (requiredStrategy) overrides it. In auto mode, recommendStrategy already
+      // consulted the soft preferredStrategy hint. Optional method → call safely
+      // on custom handlers that don't implement it (F-14).
+      const required = handler.requiredStrategy?.();
 
-      if (preferred !== "any" && preferred !== strategyType) {
+      if (required && required !== strategyType) {
         playerLogger.warn(
-          `Source requires ${preferred} strategy, switching from ${strategyType}`,
+          `Source requires ${required} strategy, switching from ${strategyType}`,
         );
 
-        strategyType = preferred;
+        strategyType = required;
       }
 
       this._currentStrategy = this.createStrategy(strategyType);

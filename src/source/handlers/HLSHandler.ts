@@ -88,6 +88,10 @@ export class HLSHandler implements ISourceHandler {
     return "html5";
   }
 
+  requiredStrategy(): "html5" | "webaudio" | undefined {
+    return "html5";
+  }
+
   async prepare(
     source: AudioSource,
     strategy: IPlaybackStrategy,

@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Player, HTML5Strategy, createVolume, createPlaybackRate } from "../index";
 import type { HlsConstructor } from "../types";
 import { PlayerErrorCode } from "../types/events";
+import type { ISourceHandler } from "../source/ISourceHandler";
+import { playerLogger } from "../utils/Logger";
 import {
   MockAudioContext,
   MockAudioElement,
@@ -1005,6 +1007,82 @@ describe("Player", () => {
       // Metadata survives and is recomputed/re-applied for the new track.
       expect(player.loudnessMetadata).toEqual({ integratedLufs: -22 });
       expect(player.getAppliedNormalizationGainDb()).toBe(6);
+    });
+  });
+
+  describe("explicit mode vs handler preference (T-13)", () => {
+    it("explicit html5 mode plays an ArrayBuffer via blob URL (F-14)", async () => {
+      // BufferHandler.preferredStrategy() is 'webaudio' but has no
+      // requiredStrategy, so an explicit html5 mode must win.
+      const player = trackPlayer(new Player({ mode: "html5" }));
+
+      await player.load({ data: createArrayBuffer() });
+
+      expect(player.mode).toBe("html5");
+    });
+
+    it("HLS still overrides an explicit webaudio mode (with a warning)", async () => {
+      const warn = vi.spyOn(playerLogger, "warn");
+      const player = trackPlayer(
+        new Player({
+          mode: "webaudio",
+          Hls: MockHls as unknown as HlsConstructor,
+        }),
+      );
+
+      await player.load({
+        url: "https://cdn.example.com/live/stream.m3u8",
+        type: "hls",
+      });
+
+      expect(player.mode).toBe("html5"); // requiredStrategy('html5') wins
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("switching from webaudio"),
+      );
+      warn.mockRestore();
+    });
+
+    it("honors explicit mode and never calls requiredStrategy on a custom handler that omits it", async () => {
+      // The class that fails silently: an external handler registered via
+      // registerHandler that does NOT implement requiredStrategy. The optional
+      // call must not throw, and its 'webaudio' preference must not override
+      // the explicit html5 mode.
+      const customHandler: ISourceHandler = {
+        id: "custom-test",
+        canHandle: (s) => s.url === "https://custom.example.com/x.mp3",
+        preferredStrategy: () => "webaudio",
+        prepare: async (source, strategy) =>
+          strategy.id === "webaudio"
+            ? { audioBuffer: { duration: 1 } as AudioBuffer, duration: 1 }
+            : { sourceUrl: source.url as string, duration: 1 },
+        getCapabilities: () => null,
+        dispose: () => undefined,
+      };
+
+      // Player keeps its SourceManager private; inject through it, matching the
+      // documented registerHandler pattern (named cast, not inlined).
+      const register = (p: Player, h: ISourceHandler): void => {
+        const withSM = p as unknown as {
+          _sourceManager: { registerHandler(handler: ISourceHandler): void };
+        };
+        withSM._sourceManager.registerHandler(h);
+      };
+
+      const explicit = trackPlayer(new Player({ mode: "html5" }));
+      register(explicit, customHandler);
+
+      await explicit.load("https://custom.example.com/x.mp3");
+
+      // Explicit html5 respected despite the handler's 'webaudio' preference.
+      expect(explicit.mode).toBe("html5");
+
+      // In auto mode, preferredStrategy still works as the selection hint.
+      const auto = trackPlayer(new Player({ mode: "auto" }));
+      register(auto, customHandler);
+
+      await auto.load("https://custom.example.com/x.mp3");
+
+      expect(auto.mode).toBe("webaudio");
     });
   });
 });
