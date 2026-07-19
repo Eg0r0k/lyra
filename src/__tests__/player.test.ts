@@ -1788,5 +1788,26 @@ describe("Player", () => {
       getLatestAudioElement().dispatchEvent(new Event("error"));
       expect(ownedErr).not.toHaveBeenCalled();
     });
+
+    it("native HLS isLive reflects the element going live after the capabilities were cached (T-30/T-15 native path)", async () => {
+      setNativeHlsSupport(true);
+      // No Hls injected → NativeHlsHandler wins for the .m3u8 (html5 element path).
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load({
+        url: "https://cdn.example.com/live.m3u8",
+        type: "hls",
+      });
+
+      // The player cached _activeCapabilities at load, while the mock element
+      // reported a finite duration → not live yet.
+      expect(player.isLive).toBe(false);
+
+      // A live native stream reports Infinity once metadata settles — which can
+      // be AFTER the cache was taken. NativeHlsHandler exposes isLive as a LIVE
+      // getter over element.duration, so the cached reference must reflect the
+      // flip without a reload (guards the "isLive stuck on false" cache hazard).
+      getLatestAudioElement().duration = Infinity;
+      expect(player.isLive).toBe(true);
+    });
   });
 });
