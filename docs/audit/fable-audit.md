@@ -511,7 +511,7 @@ Priority: P1 · Type: refactor · Breaking: no · Score: S · Depends on: T-05 �
 
 ---
 
-### [ ] T-15 — Live HLS support: isLive, Infinity duration, seekable range
+### [ ] T-15 — Live HLS support: isLive, Infinity duration, seekable range — AS BUILT (3ed167d)
 
 Priority: P1 · Type: fix · Breaking: no (additive) · Score: M · Depends on: T-05, T-06 (live fixture) · Closes findings: F-08
 
@@ -523,13 +523,29 @@ Priority: P1 · Type: fix · Breaking: no (additive) · Score: M · Depends on: 
 3. Player: add get isLive(): boolean (from active capabilities, default false). seek on live: clamp to element.seekable range when available; no-op with debug log when the range is empty. progress = 0 when duration === Infinity.
 4. Add SourceCapabilities.getSeekableRange?(): { start: number; end: number } | null.
 
-**Contract.** duration is Infinity for live. player.isLive: boolean. timeupdate.progress === 0 for live. getSeekableRange optional capability.
+**Contract (AS BUILT).** `player.isLive: boolean` is the authoritative live
+flag (from the active handler's capability), **not** `duration === Infinity`.
+`duration` is `Infinity` only for **native HLS** (Safari/AVFoundation, which
+sets `HTMLMediaElement.duration = Infinity` for live); **hls.js returns a finite
+sliding-window duration** for the same live stream. `timeupdate.progress === 0`
+for live — gated on `player.isLive` (so it is 0 for hls.js live too, despite the
+finite duration), plus a finite-duration guard. `seek()` on live clamps to the
+seekable range and no-ops (debug log) when empty. `getSeekableRange` optional
+capability. `TimeSeconds` permits `Infinity` (rejects only NaN/negatives).
+
+*Justification for the divergence from the original wording ("duration is
+Infinity for live", "progress = 0 when duration === Infinity"):* that model
+assumed live ⟺ Infinity, which holds for native HLS but not hls.js. Gating
+`progress` and the live-seek path on `duration === Infinity` would leak a
+non-zero, growing progress on hls.js live. Gating on `isLive` is correct for
+both engines. Verified end-to-end: `e2e/hls.spec.ts` plays the live fixture on
+real hls.js and observes finite duration + `isLive===true` + `progress===0`.
 
 **Don't do.** Don't implement live-edge tracking/latency controls; don't emit new events.
 
 **Acceptance criteria.**
-- [ ] Live fixture: isLive===true, duration===Infinity, progress 0, seek within seekable works, seek beyond clamps.
-- [ ] VOD unchanged (finite duration, progress correct).
+- [x] Live fixture: `isLive===true`, progress 0, seek within seekable works, seek beyond clamps. Duration is `Infinity` for native HLS / a finite sliding window for hls.js (both accepted; live-ness asserted via `isLive`). (jsdom unit covers the Infinity path; e2e covers hls.js finite-window on chromium.)
+- [x] VOD unchanged (finite duration, progress correct).
 
 **Tests.** "live manifest reports isLive and Infinity duration" — catches F-08. "seek on live clamps to seekable range" — catches the clamp-to-0 bug. "TimeSeconds(Infinity) preserved" — unit, catches the brand launder. e2e (T-06): live playlist plays ≥1 segment in chromium.
 
