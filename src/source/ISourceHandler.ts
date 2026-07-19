@@ -18,6 +18,14 @@ export interface SourceCapabilities {
   qualityLevels?: QualityLevel[];
   setQuality?: (level: number) => void;
   getCurrentQuality?: () => number;
+  /**
+   * Post-load quality channel. The handler registers the player callback and
+   * invokes it whenever the engine actually switches level (e.g. hls.js
+   * `LEVEL_SWITCHED`) — including ABR-driven switches after `setQuality(-1)`.
+   * This is why `Player.setQuality` does not emit `qualitychange` synchronously:
+   * the real, engine-selected level arrives here asynchronously.
+   */
+  onQualityChange?: (callback: (level: QualityLevel) => void) => void;
   supportsSeek?: boolean;
   isLive?: boolean;
   /**

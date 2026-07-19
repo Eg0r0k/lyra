@@ -11,7 +11,7 @@ import { isHlsSource } from "./handlers/hls-source";
 import { PlayerError, PlayerErrorCode } from "../types/events";
 
 export interface SourceManagerOptions {
-  hlsConfig?: Partial<HLSConfig>;
+  hlsConfig?: Partial<HLSConfig> & Record<string, unknown>;
   Hls?: HlsConstructor;
 }
 

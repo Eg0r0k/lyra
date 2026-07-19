@@ -144,3 +144,35 @@ test("live HLS reaches segment playback with isLive, finite window duration, pro
   expect(result.lastProgress).toBe(0); // progress is 0 for live
   expect(result.clampedToSeekable).toBe(true);
 });
+
+// T-16: prove the LEVEL_SWITCHED → qualitychange relay against real hls.js —
+// the engine reports the actually-selected level asynchronously (this is why
+// setQuality does not emit synchronously).
+test("qualitychange relays the engine-selected level from real hls.js", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+
+  const result = await page.evaluate(async () => {
+    const player = new window.Lyra.Player({ Hls: window.Hls });
+
+    const levels: { index: number }[] = [];
+    player.on("qualitychange", (l) => levels.push(l));
+
+    await player.load({ url: "/fixtures/hls/vod.m3u8", type: "hls" });
+    await player.play();
+
+    const setQualityReturn = player.setQuality(-1); // auto
+
+    const delay = Promise.withResolvers<void>();
+    setTimeout(() => delay.resolve(), 800);
+    await delay.promise;
+
+    await player.dispose();
+    return { count: levels.length, firstIndex: levels[0]?.index, setQualityReturn };
+  });
+
+  expect(result.setQualityReturn).toBe(true);
+  expect(result.count).toBeGreaterThan(0); // real LEVEL_SWITCHED was relayed
+  expect(result.firstIndex).toBe(0);
+});

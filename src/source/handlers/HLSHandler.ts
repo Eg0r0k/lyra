@@ -36,11 +36,15 @@ interface HlsLevelLoadedData {
   details?: { live?: boolean };
 }
 
+interface HlsLevelSwitchedData {
+  level?: number;
+}
+
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
   private _hls: HlsInstance | null = null;
   private _Hls: HlsConstructor | null;
-  private _config: Partial<HLSConfig>;
+  private _config: Partial<HLSConfig> & Record<string, unknown>;
   private _qualityLevels: QualityLevel[] = [];
   /** Live flag derived from LEVEL_LOADED manifest details (F-08). */
   private _isLive = false;
@@ -52,6 +56,8 @@ export class HLSHandler implements ISourceHandler {
   private _signal: AbortSignal | null = null;
   /** Player callback for unrecoverable runtime errors. */
   private _onRuntimeError: ((error: PlayerError) => void) | null = null;
+  /** Player callback for engine-driven level switches (LEVEL_SWITCHED). */
+  private _onQualityChange: ((level: QualityLevel) => void) | null = null;
   private _backoffTimer: number | null = null;
   private _networkRetries = 0;
   /** 0 = none, 1 = did recoverMediaError, 2 = did swapAudioCodec+recover. */
@@ -60,7 +66,10 @@ export class HLSHandler implements ISourceHandler {
   /** Fatal network errors: up to 3 startLoad() retries with 1s/2s/4s backoff. */
   private static readonly MAX_NETWORK_RETRIES = 3;
 
-  constructor(config?: Partial<HLSConfig>, HlsClass?: HlsConstructor) {
+  constructor(
+    config?: Partial<HLSConfig> & Record<string, unknown>,
+    HlsClass?: HlsConstructor,
+  ) {
     this._config = config ?? DEFAULT_OPTIONS.hlsConfig;
     this._Hls = HlsClass ?? null;
 
@@ -130,13 +139,10 @@ export class HLSHandler implements ISourceHandler {
 
     this.reset();
 
-    this._hls = new this._Hls({
-      maxBufferLength: this._config.maxBufferLength,
-      maxMaxBufferLength: this._config.maxMaxBufferLength,
-      startLevel: this._config.startLevel ?? -1,
-      autoStartLoad: this._config.autoStartLoad ?? true,
-      enableWorker: this._config.enableWorker ?? true,
-    });
+    // Pass the full merged config through (defaults + user), so every hls.js
+    // option — including startFragPrefetch and keys the lib doesn't model —
+    // reaches the constructor (F-19).
+    this._hls = new this._Hls({ ...this._config });
 
     const audioElement = strategy.getMediaElement?.();
     if (!audioElement) {
@@ -207,6 +213,19 @@ export class HLSHandler implements ISourceHandler {
         this._isLive = levelData.details?.live ?? false;
       });
 
+      // Engine-driven level switch (manual set or ABR after setQuality(-1)).
+      // Relay the REAL selected level so consumers learn the current quality
+      // even in auto mode (F-20 / the setQuality(-1) gap).
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_event: unknown, data: unknown) => {
+        const switched = data as HlsLevelSwitchedData;
+        const index = switched.level;
+        if (index === undefined) return;
+        const level = this._qualityLevels[index];
+        if (level) {
+          this._onQualityChange?.(level);
+        }
+      });
+
       // Persistent error listener — survives resolution. Pre-ready fatals fail
       // the load (as before); post-ready fatals go through recovery (F-07).
       hls.on(Hls.Events.ERROR, (_event: unknown, data: unknown) => {
@@ -245,6 +264,9 @@ export class HLSHandler implements ISourceHandler {
       getCurrentQuality: () => this._hls?.currentLevel ?? -1,
       isLive: this._isLive,
       getSeekableRange: () => this.readSeekableRange(),
+      onQualityChange: (callback: (level: QualityLevel) => void) => {
+        this._onQualityChange = callback;
+      },
       onRuntimeError: (callback: (error: PlayerError) => void) => {
         this._onRuntimeError = callback;
       },
@@ -369,6 +391,7 @@ export class HLSHandler implements ISourceHandler {
     this._mediaRecoveryStage = 0;
     this._signal = null;
     this._onRuntimeError = null;
+    this._onQualityChange = null;
   }
 
   dispose(): void {

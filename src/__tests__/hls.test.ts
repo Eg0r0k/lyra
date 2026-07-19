@@ -19,6 +19,7 @@ class MockHls {
     MEDIA_ATTACHED: "mediaAttached",
     FRAG_BUFFERED: "fragBuffered",
     LEVEL_LOADED: "levelLoaded",
+    LEVEL_SWITCHED: "levelSwitched",
     ERROR: "error",
   };
 
@@ -36,15 +37,28 @@ class MockHls {
     return true;
   }
 
-  public currentLevel = -1;
+  private _currentLevel = -1;
+  public get currentLevel(): number {
+    return this._currentLevel;
+  }
+  // Setting the level triggers a real LEVEL_SWITCHED (auto → ABR picks index 0),
+  // mirroring hls.js so the relay → qualitychange path is exercised.
+  public set currentLevel(value: number) {
+    this._currentLevel = value;
+    this.emit(MockHls.Events.LEVEL_SWITCHED, undefined, {
+      level: value === -1 ? 0 : value,
+    });
+  }
   public levels = [
     { bitrate: 256_000, audioCodec: "aac" },
     { bitrate: 1_250_000, audioCodec: "aac" },
   ];
 
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  public readonly config: Record<string, unknown>;
 
-  constructor(_config?: Record<string, unknown>) {
+  constructor(config?: Record<string, unknown>) {
+    this.config = config ?? {};
     MockHls.instances.push(this);
   }
 
@@ -161,7 +175,9 @@ describe("HLS", () => {
     ]);
     expect(player.getCurrentQuality()).toBe(-1);
 
-    player.setQuality(1);
+    // Explicit level: returns true; qualitychange arrives via LEVEL_SWITCHED
+    // relay with the real level (not a synchronous synthetic emit).
+    expect(player.setQuality(1)).toBe(true);
     expect(player.getCurrentQuality()).toBe(1);
     expect(qualityChange).toHaveBeenCalledWith({
       index: 1,
@@ -170,8 +186,40 @@ describe("HLS", () => {
       codec: "aac",
     });
 
-    player.setQuality(-1);
+    // Auto (-1): returns true; ABR picks a real level → relayed as qualitychange
+    // (the F-20 gap — auto used to emit nothing).
+    qualityChange.mockClear();
+    expect(player.setQuality(-1)).toBe(true);
     expect(player.getCurrentQuality()).toBe(-1);
+    expect(qualityChange).toHaveBeenCalledWith({
+      index: 0,
+      bitrate: 256000,
+      label: "256 kbps",
+      codec: "aac",
+    });
+
+    // Invalid index: no-op, returns false, no further qualitychange.
+    qualityChange.mockClear();
+    expect(player.setQuality(99)).toBe(false);
+    expect(qualityChange).not.toHaveBeenCalled();
+    expect(player.getCurrentQuality()).toBe(-1);
+  });
+
+  it("passes the full merged hlsConfig through to the Hls constructor (F-19)", async () => {
+    player = new Player({
+      Hls: MockHls as unknown as HlsConstructor,
+      hlsConfig: { maxBufferLength: 10, startFragPrefetch: true, customKey: "x" },
+    });
+    await player.load({
+      url: "https://cdn.example.com/live/playlist.m3u8",
+      type: "hls",
+    });
+
+    const hls = MockHls.instances[MockHls.instances.length - 1];
+    expect(hls.config.maxBufferLength).toBe(10); // user override
+    expect(hls.config.maxMaxBufferLength).toBe(60); // default preserved
+    expect(hls.config.startFragPrefetch).toBe(true); // now forwarded (was dead)
+    expect(hls.config.customKey).toBe("x"); // arbitrary key passes through
   });
 
   const loadAndPlay = async (p: Player): Promise<MockHls> => {

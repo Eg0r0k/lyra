@@ -633,6 +633,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
       // unrecoverable errors here after its own recovery is exhausted (F-07).
       capabilities?.onRuntimeError?.((err) => this.handleRuntimeError(err));
 
+      // Quality channel: the engine reports the REAL level asynchronously via
+      // LEVEL_SWITCHED (incl. ABR after setQuality(-1)), so qualitychange is
+      // emitted here, not synchronously from setQuality (F-20 / auto gap).
+      capabilities?.onQualityChange?.((level) =>
+        this.emit("qualitychange", level),
+      );
+
       if (capabilities?.qualityLevels?.length) {
         this.emit("qualitiesavailable", capabilities.qualityLevels);
       }
@@ -1086,18 +1093,25 @@ export class Player extends EventEmitter<PlayerEventMap> {
     return this._sourceManager.getActiveCapabilities()?.qualityLevels ?? [];
   }
 
-  setQuality(level: number): void {
-    const capabilities = this._sourceManager.getActiveCapabilities();
-
-    capabilities?.setQuality?.(level);
-
+  /**
+   * Select an HLS quality level: `-1` = auto (ABR), or a valid index from
+   * {@link Player.getQualityLevels}. Returns `false` (no-op) for an invalid
+   * index. `qualitychange` is NOT emitted synchronously — it fires when the
+   * engine actually switches level (asynchronously; for `-1`, once ABR picks a
+   * level), carrying the real selected level.
+   */
+  setQuality(level: number): boolean {
     const levels = this.getQualityLevels();
 
-    const current = levels[level];
-
-    if (current) {
-      this.emit("qualitychange", current);
+    if (level !== -1 && !levels[level]) {
+      playerLogger.debug(`setQuality: invalid level ${level}`);
+      return false;
     }
+
+    const capabilities = this._sourceManager.getActiveCapabilities();
+    capabilities?.setQuality?.(level);
+
+    return true;
   }
 
   getCurrentQuality(): number {

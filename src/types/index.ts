@@ -124,7 +124,7 @@ export interface PlayerOptions {
    * until a time-stretch plugin is provided; see {@link Player.canPreservePitch}.
    */
   preservesPitch?: boolean;
-  hlsConfig?: Partial<HLSConfig>;
+  hlsConfig?: Partial<HLSConfig> & Record<string, unknown>;
   loudnessNormalization?: LoudnessNormalizationOptions;
   Hls?: HlsConstructor;
 }
@@ -144,7 +144,7 @@ export interface LoadOptions {
 export type ResolvedPlayerOptions = Required<
   Omit<PlayerOptions, "Hls" | "loudnessNormalization" | "hlsConfig">
 > & {
-  hlsConfig: Required<HLSConfig>;
+  hlsConfig: Required<HLSConfig> & Record<string, unknown>;
   loudnessNormalization: Required<LoudnessNormalizationOptions>;
   Hls?: HlsConstructor;
 };
