@@ -81,10 +81,19 @@ export class HTML5Strategy
    */
   private _activeInitCleanup: (() => void) | null = null;
 
+  /** Consume-once: suppress the next native `pause` triggered by stop() (F-51). */
+  private _suppressPauseOnce = false;
+  /** Consume-once: suppress the next native `seeked` from stop()'s reset (F-51). */
+  private _suppressSeekedOnce = false;
+
   private _onPlay = () => {
     this.emit("play");
   };
   private _onPause = () => {
+    if (this._suppressPauseOnce) {
+      this._suppressPauseOnce = false;
+      return;
+    }
     if (!this._audio.ended) {
       this.emit("pause");
     }
@@ -110,6 +119,10 @@ export class HTML5Strategy
     this.emit("timeupdate", TimeSeconds(this._audio.currentTime));
   };
   private _onSeeked = () => {
+    if (this._suppressSeekedOnce) {
+      this._suppressSeekedOnce = false;
+      return;
+    }
     this.emit("seeked", TimeSeconds(this._audio.currentTime));
   };
   private _onDurationChange = () => {
@@ -330,6 +343,16 @@ export class HTML5Strategy
   }
 
   stop(): void {
+    // stop() must be event-clean: the native pause + currentTime=0 reset would
+    // otherwise surface a spurious `pause` and `seeked(0)`. Arm consume-once
+    // suppression only when the matching native event will actually fire, so a
+    // flag cannot linger and swallow a later genuine event (F-51).
+    if (!this._audio.paused) {
+      this._suppressPauseOnce = true;
+    }
+    if (this._audio.currentTime !== 0) {
+      this._suppressSeekedOnce = true;
+    }
     this._audio.pause();
     this._audio.currentTime = 0;
   }
@@ -414,9 +437,10 @@ export class HTML5Strategy
     playerLogger.debug("HTML5Strategy dispose");
     this._activeInitCleanup?.();
     this._activeInitCleanup = null;
-    this._audio.pause();
-    this._audio.src = "";
-    this._audio.load();
+    // Detach every listener BEFORE pause()/src=""/load() so teardown never
+    // relays a stale pause/seeked/error to the consumer — the mock fires these
+    // synchronously and a real browser fires them async after listeners would
+    // otherwise still be attached (F-51; also the F-05 dispose safety).
     this._audio.removeEventListener("play", this._onPlay);
     this._audio.removeEventListener("pause", this._onPause);
     this._audio.removeEventListener("canplaythrough", this._onCanPlayThrough);
@@ -427,9 +451,12 @@ export class HTML5Strategy
     this._audio.removeEventListener("seeked", this._onSeeked);
     this._audio.removeEventListener("durationchange", this._onDurationChange);
     this._audio.removeEventListener("error", this._onError);
+    this.removeAllListeners();
+    this._audio.pause();
+    this._audio.src = "";
+    this._audio.load();
     this._sourceNode?.disconnect();
     this._sourceNode = null;
     this._isReady = false;
-    this.removeAllListeners();
   }
 }

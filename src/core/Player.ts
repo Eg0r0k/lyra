@@ -243,9 +243,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * Whether the active source is a live stream (unbounded). For live sources
-   * {@link Player.duration} is `Infinity` and `timeupdate.progress` is `0`.
-   * `false` when no source is loaded or the handler reports no live capability.
+   * Whether the active source is a live stream. `timeupdate.progress` is always
+   * `0` for live. Note that {@link Player.duration} is `Infinity` only for
+   * native HLS (Safari/AVFoundation); hls.js reports a finite, growing
+   * sliding-window duration for the same live stream — so branch on `isLive`,
+   * never on `duration === Infinity`. `false` when nothing is loaded or the
+   * handler reports no live capability.
    */
   get isLive(): boolean {
     return this._sourceManager.getActiveCapabilities()?.isLive ?? false;
@@ -1004,7 +1007,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
     if (!this.isPlaying) {
       await this._audioGraph.fadeTo(0, 0);
 
-      await this.play();
+      try {
+        await this.play();
+      } catch (err) {
+        // Autoplay/gesture block: play() rejected after we dropped the fade
+        // multiplier to 0. Restore it so a later successful play() is not left
+        // permanently silent, then rethrow (F-50).
+        await this._audioGraph.fadeTo(1, 0);
+        throw err;
+      }
     } else {
       // Already playing: continue from the current fade multiplier instead of
       // forcing an audible drop to silence before ramping back up.

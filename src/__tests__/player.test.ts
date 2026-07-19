@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Player, HTML5Strategy, createVolume, createPlaybackRate } from "../index";
 import type { HlsConstructor } from "../types";
-import { PlayerErrorCode } from "../types/events";
+import { PlayerError, PlayerErrorCode } from "../types/events";
 import type { ISourceHandler } from "../source/ISourceHandler";
 import { playerLogger } from "../utils/Logger";
 import {
@@ -1326,6 +1326,89 @@ describe("Player", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("stop()/dispose() event cleanliness (F-51) and fadeIn recovery (F-50)", () => {
+    it("webaudio stop() emits stop only — no spurious pause", async () => {
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      const events: string[] = [];
+      player.on("pause", () => events.push("pause"));
+      player.on("stop", () => events.push("stop"));
+
+      player.stop();
+
+      expect(events).toEqual(["stop"]);
+    });
+
+    it("html5 stop() emits stop only — no spurious pause or seeked(0)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+
+      const el = getLatestAudioElement();
+      el.currentTime = 42; // a real position, so stop()'s reset would fire native seeked
+
+      const events: string[] = [];
+      player.on("pause", () => events.push("pause"));
+      player.on("seeked", () => events.push("seeked"));
+      player.on("stop", () => events.push("stop"));
+
+      player.stop();
+      // Browsers fire the seeked from currentTime=0 asynchronously; simulate it.
+      el.dispatchEvent(new Event("seeked"));
+
+      expect(events).toEqual(["stop"]);
+    });
+
+    it("a genuine pause/seeked after stop() still emits (consume-once does not linger)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5" }));
+      await player.load("https://cdn.example.com/song.mp3");
+      await player.play();
+
+      const el = getLatestAudioElement();
+      el.currentTime = 10;
+      player.stop(); // arms + consumes the pause suppression via the native pause
+      el.dispatchEvent(new Event("seeked")); // consumes the seeked suppression
+
+      const events: string[] = [];
+      player.on("pause", () => events.push("pause"));
+      player.on("seeked", () => events.push("seeked"));
+
+      await player.play();
+      player.pause();
+      el.dispatchEvent(new Event("seeked"));
+
+      expect(events).toEqual(["pause", "seeked"]);
+    });
+
+    it("load() during webaudio playback relays no pause from the disposed strategy", async () => {
+      const player = trackPlayer(new Player({ mode: "webaudio" }));
+      await player.load({ data: createArrayBuffer() });
+      await player.play();
+
+      const events: string[] = [];
+      player.on("pause", () => events.push("pause"));
+
+      await player.load({ data: createArrayBuffer() }); // supersede while playing
+
+      expect(events).not.toContain("pause");
+    });
+
+    it("fadeIn restores the fade multiplier to 1 when play() is blocked (F-50)", async () => {
+      const player = trackPlayer(new Player({ mode: "html5", volume: 1 }));
+      await player.load("https://cdn.example.com/song.mp3");
+
+      // Not playing → fadeIn drops the multiplier to 0, then calls play().
+      setNextAudioPlayError(new DOMException("blocked", "NotAllowedError"));
+
+      await expect(player.fadeIn(0)).rejects.toBeInstanceOf(PlayerError);
+
+      // The multiplier is restored so a later successful play() is not silent.
+      expect(player.fadeMultiplier).toBe(1);
     });
   });
 

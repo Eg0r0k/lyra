@@ -356,6 +356,27 @@ describe("HLS", () => {
     }
   });
 
+  it("overlapping fatal network errors leave a single backoff timer (F-40)", async () => {
+    vi.useFakeTimers();
+    try {
+      player = new Player({ Hls: MockHls as unknown as HlsConstructor });
+      const hls = await loadAndPlay(player);
+
+      hls.emitError("networkError"); // schedules the first backoff (1s)
+      hls.emitError("networkError"); // supersedes it — the first must be cleared
+
+      // Without the clearTimeout guard both timers would be pending here.
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4000);
+
+      // Only the surviving timer fires → one startLoad, not two.
+      expect(hls.startLoad).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runtime error while paused transitions to error (F-35)", async () => {
     player = new Player({ Hls: MockHls as unknown as HlsConstructor });
     const hls = await loadAndPlay(player);

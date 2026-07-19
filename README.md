@@ -553,10 +553,11 @@ A strict state machine; invalid transitions are ignored with a console warning (
 
 ```
 idle ──► loading ──► ready ──► playing ⇄ paused
-                       ▲          │        │
+                       ▲          │         │
                        └──────────┴──► buffering
-   (any) ──► error ──► loading            │
-   (any) ──► disposed
+
+error ◄── loading / ready / playing / paused / buffering   (not idle)
+error ──► loading            disposed ◄── any state
 ```
 
 | State | Meaning |

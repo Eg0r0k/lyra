@@ -43,6 +43,7 @@ export default defineConfig({
         "**/webaudio.spec.ts",
         "**/hls.spec.ts",
         "**/routing.spec.ts",
+        "**/cors.spec.ts",
       ],
     },
     {

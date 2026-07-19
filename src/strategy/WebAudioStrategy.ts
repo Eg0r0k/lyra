@@ -92,6 +92,11 @@ export class WebAudioStrategy
    */
   private _seeking = false;
   /**
+   * True during {@link WebAudioStrategy.stop} so the internal pause() does not
+   * leak a spurious `pause` event — stop is not a user pause (F-51).
+   */
+  private _stopping = false;
+  /**
    * Last stable playback position.
    *
    * @remarks
@@ -347,7 +352,7 @@ export class WebAudioStrategy
 
     this.stopTimeUpdate();
 
-    if (!this._seeking) {
+    if (!this._seeking && !this._stopping) {
       this.emit("pause");
     }
   }
@@ -355,9 +360,13 @@ export class WebAudioStrategy
   stop(): void {
     playerLogger.debug("Stopping playback");
 
-    this.pause();
-
-    this._pausedAt = 0;
+    this._stopping = true;
+    try {
+      this.pause();
+      this._pausedAt = 0;
+    } finally {
+      this._stopping = false;
+    }
   }
 
   seek(time: TimeSeconds): void {
@@ -592,6 +601,10 @@ export class WebAudioStrategy
   dispose(): void {
     playerLogger.debug("Disposing WebAudioStrategy");
 
+    // Detach listeners BEFORE tearing down so a load()-during-playback disposal
+    // never relays a stale pause/ended from the old strategy (F-51).
+    this.removeAllListeners();
+
     this.stop();
     this.stopTimeUpdate();
 
@@ -604,7 +617,5 @@ export class WebAudioStrategy
     this._ctx = null;
 
     this._isReady = false;
-
-    this.removeAllListeners();
   }
 }

@@ -325,6 +325,10 @@ export class HLSHandler implements ISourceHandler {
         playerLogger.debug(
           `HLS fatal network error — retry ${attempt + 1}/${MAX_NETWORK_RETRIES} in ${delayMs}ms`,
         );
+        // Clear any still-pending backoff so overlapping fatal network errors
+        // can't leave two timers racing to startLoad() (F-40). clearTimeout is
+        // a no-op on a null handle.
+        clearTimeout(this._backoffTimer ?? undefined);
         this._backoffTimer = setTimeout(() => {
           this._backoffTimer = null;
           if (this._signal?.aborted) return;
