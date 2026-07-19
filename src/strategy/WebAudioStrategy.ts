@@ -451,9 +451,12 @@ export class WebAudioStrategy
 
     if (this._stretcher) {
       // T-28: the plugin is a RELATIVE input-consumption meter (reset by
-      // flush()); the absolute position is _stretchBaseSec + its reading. Guard
-      // against a stale/late worklet report dragging the position backward
-      // within a rebase epoch (skipped while looping, where wrap is expected).
+      // flush()); the absolute position is _stretchBaseSec + its reading. The
+      // monotonicity guard only prevents a stale/late worklet report from
+      // dragging the position backward within a rebase epoch — it does NOT
+      // interpolate forward, so position advances in steps at the plugin's
+      // report cadence (known behavior; see the README rate & pitch note).
+      // Skipped while looping, where a backward wrap is expected.
       const raw = this._stretchBaseSec + this._stretcher.getInputPosition();
       current = this._loop ? raw : Math.max(raw, this._lastStretchPos);
       this._lastStretchPos = current;

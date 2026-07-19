@@ -270,15 +270,28 @@ const player = new Player({ mode: "webaudio", timeStretch });
 
 Recommended plugins (not bundled): **SoundTouchJS** worklet (MIT, light) and **Signalsmith Stretch** WASM (MIT, best quality/weight). **Rubber Band** WASM is GPL/commercial — avoid unless your license permits it. Without a plugin, Web Audio resamples (pitch shifts with rate).
 
-> **Position in stretcher mode leads the audible output.** With a plugin
+> **Position in stretcher mode — two independent caveats.** With a plugin
 > attached, `player.currentTime` (and `timeupdate`) track how far the source has
-> been *consumed*, which runs ahead of what you *hear* by the plugin's internal
-> latency — typically **~50–100 ms**. This is inherent to time-stretching and is
-> not smoothed away. It's imperceptible for a progress bar, but if you sync
-> tightly to audio (waveform playheads, karaoke/lyrics), offset your visuals by
-> that latency (or measure it against `AudioContext.currentTime`). `seek()` and
-> resume re-anchor the position exactly (the plugin is flushed), so the lead
-> only accrues during continuous playback.
+> been *consumed*, derived from the plugin's reported input position.
+>
+> 1. **Latency (a constant lead).** The consumed position runs *ahead* of what
+>    you *hear* by the plugin's internal latency — typically **~50–100 ms**.
+>    This is a fixed offset inherent to time-stretching; it is not corrected. For
+>    a progress bar it is imperceptible, but for tight sync (waveform playheads,
+>    karaoke/lyrics) offset your visuals by that latency (or measure it against
+>    `AudioContext.currentTime`).
+> 2. **Update granularity (no smoothing — known behavior).** The position
+>    advances in steps at the plugin's report cadence, not continuously. A plugin
+>    that posts updates faster than the ~4/s `timeupdate` (the common case:
+>    worklets typically report every ~10–50 ms) looks smooth; one that reports
+>    *slower* than 250 ms makes consecutive `timeupdate` events repeat the same
+>    value and then jump. Values are always accurate when they arrive and never
+>    move backward, but they are **not** interpolated between reports. For
+>    frame-smooth animation, drive it off `requestAnimationFrame` and treat
+>    `currentTime` as a coarse clock, or use a plugin with a fast report cadence.
+>
+> `seek()` and resume re-anchor the position exactly (the plugin is flushed), so
+> neither the lead nor the step error accumulates across them.
 
 ---
 
