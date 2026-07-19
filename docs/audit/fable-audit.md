@@ -799,7 +799,7 @@ Priority: P2 · Type: feature · Breaking: no (additive; plugin optional) · Sco
 
 ---
 
-### [ ] T-25 — README overhaul
+### [x] T-25 — README overhaul
 
 Priority: P1 · Type: docs · Breaking: no · Score: M · Depends on: T-02, T-03, T-04, T-10, T-15, T-23 (documents their contracts) · Closes findings: F-30; documents F-11, F-12 caveats
 

@@ -1,38 +1,37 @@
 # lyra-audio
 
-A flexible, lightweight audio player library for the browser. Supports both **Web Audio API** and **HTML5 Audio** playback strategies, with optional **HLS streaming** via [hls.js](https://github.com/video-dev/hls.js).
+[![npm](https://img.shields.io/npm/v/lyra-audio.svg)](https://www.npmjs.com/package/lyra-audio)
+[![bundle size](https://img.shields.io/badge/gzip-~20%20KB-brightgreen.svg)](#bundle-size--tree-shaking)
+[![license](https://img.shields.io/npm/l/lyra-audio.svg)](./LICENSE)
 
-## Features
+A browser audio player that plays URLs, `File`/`Blob`, `ArrayBuffer`/`Uint8Array`, and HLS streams through one `Player` facade. It picks an HTML5 `<audio>` pipeline or a Web Audio pipeline per source, and routes HTML5 through the Web Audio graph by default so EQ, analyser, fades, and loudness normalization work everywhere.
 
-- 🎵 **Dual playback strategies** — HTML5 Audio for streaming, Web Audio API for precise control
-- 📡 **HLS streaming** — optional support via hls.js (peer dependency)
-- 🎛️ **Built-in 10-band EQ** — with enable/disable toggle
-- 📊 **Audio analysis** — frequency and time-domain data via AnalyserNode
-- 🔊 **Volume, mute, playback rate, loop** — full playback control
-- 🎚️ **Fade in / out** — smooth volume transitions via Web Audio API
-- 📦 **Multiple source types** — URL, Blob, File, ArrayBuffer, Uint8Array, HLS
-- 🛡️ **Cancellation support** — safe loading cancellation with CancellationToken
-- 🔄 **State machine** — predictable player lifecycle with validated transitions
-- 📝 **TypeScript first** — full type definitions with branded types for safety
+Browser-only: it relies on `AudioContext`, `HTMLMediaElement`, `File`/`Blob`, `fetch`, `URL.createObjectURL`, and `AbortController`.
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Factory Methods](#factory-methods)
-- [Loading Sources](#loading-sources)
-- [HLS Streaming](#hls-streaming)
-- [Playback Control](#playback-control)
-- [Volume & Mute](#volume--mute)
-- [Fade Effects](#fade-effects)
+- [Quick start](#quick-start)
+- [Browser support & limitations](#browser-support--limitations)
+- [Choosing a strategy](#choosing-a-strategy)
+- [Loading sources](#loading-sources)
+- [HLS streaming](#hls-streaming)
+- [Playback control](#playback-control)
+- [Rate & pitch](#rate--pitch)
+- [Volume & mute](#volume--mute)
+- [Fades](#fades)
 - [Equalizer](#equalizer)
-- [Audio Visualization](#audio-visualization)
+- [Visualization](#visualization)
+- [Loudness normalization](#loudness-normalization)
+- [AudioContext management](#audiocontext-management)
 - [Cancellation](#cancellation)
 - [Events](#events)
-- [Error Handling](#error-handling)
-- [Player State](#player-state)
-- [TypeScript: Branded Types](#typescript-branded-types)
-- [API Reference](#api-reference)
+- [Error handling](#error-handling)
+- [Player state](#player-state)
+- [TypeScript: branded types](#typescript-branded-types)
+- [Bundle size & tree-shaking](#bundle-size--tree-shaking)
+- [API reference](#api-reference)
+- [Migration](#migration)
 
 ---
 
@@ -44,7 +43,7 @@ npm install lyra-audio
 pnpm add lyra-audio
 ```
 
-For HLS support, also install hls.js:
+HLS via [hls.js](https://github.com/video-dev/hls.js) is an optional peer dependency — install it only if you need HLS on non-Safari browsers, and inject the constructor yourself (lyra-audio never imports it):
 
 ```bash
 pnpm add hls.js
@@ -52,7 +51,7 @@ pnpm add hls.js
 
 ---
 
-## Quick Start
+## Quick start
 
 ```typescript
 import { Player } from "lyra-audio";
@@ -60,12 +59,10 @@ import { Player } from "lyra-audio";
 const player = Player.auto();
 
 await player.load("https://example.com/song.mp3");
-await player.play();
+await player.play(); // call from a user gesture — see Browser support
 
 player.on("timeupdate", ({ currentTime, duration, progress }) => {
-  console.log(
-    `${currentTime}s / ${duration}s (${(progress * 100).toFixed(1)}%)`,
-  );
+  console.log(`${currentTime}s / ${duration}s (${(progress * 100).toFixed(1)}%)`);
 });
 
 player.on("ended", () => console.log("Track finished"));
@@ -75,82 +72,102 @@ await player.dispose();
 
 ---
 
-## Factory Methods
+## Browser support & limitations
 
-Three factory methods cover the most common use cases:
+**Autoplay & the gesture unlock.** Browsers block audio until the user interacts with the page. Call `play()` (or `load({ ..., })` with `autoplay: true`) from within a click/tap handler. If playback is blocked, `play()` rejects with `PlayerErrorCode.PLAYBACK_NOT_ALLOWED`. To warm up the `AudioContext` inside a gesture without starting a track, call `unlockAudio()` (see [AudioContext management](#audiocontext-management)).
 
-```typescript
-import { Player } from "lyra-audio";
+> **`autoplay: true` does not fail the load.** When only autoplay is blocked, `load()` still resolves and the player reaches `ready`; a single `PLAYBACK_NOT_ALLOWED` **error event** is emitted and the state stays `ready`. Re-`play()` from a user gesture. (A manual `play()` call still rejects so you can `catch` it.)
 
-// Auto-detect the best strategy based on source type
-const player = Player.auto();
+**iOS element-volume caveat.** By default (`webAudioRouting: 'always'`) volume is applied by the Web Audio graph, so it works on iOS. If you opt out of routing (`webAudioRouting: 'never'`, or after a CORS fallback), volume falls back to `HTMLMediaElement.volume`, which **iOS Safari ignores** — the element always plays at system volume.
 
-// Optimized for music — uses "playback" latency hint for better audio quality
-const musicPlayer = Player.forMusic();
+**CORS for EQ / analyser / fades (routed HTML5).** With routing on, a cross-origin URL gets `crossOrigin="anonymous"`, so the server **must** send CORS headers or the media fails to load. Two escapes:
+- `webAudioRouting: 'never'` — plain element playback, no graph, no `crossOrigin` (and `player.graph` is `null`).
+- `corsFallback: true` — if a routed cross-origin load fails with a media error, retry it once without `crossOrigin` and without the graph (that track loses EQ/analyser/fades).
 
-// Optimized for live streaming — HTML5 only, metadata preload
-const streamPlayer = Player.forStreaming();
+Both are settable globally in `PlayerOptions` or per call via the second argument to `load()`.
 
-// Full control via constructor
-const customPlayer = new Player({
-  mode: "webaudio", // "html5" | "webaudio" | "auto"
-  volume: 0.5,
-  autoplay: true,
-  loop: true,
-  latencyHint: "playback",
-  muted: false,
-  playbackRate: 1,
-  preload: "auto", // "none" | "metadata" | "auto"
-});
-```
+**HLS matrix.**
 
-### Choosing a strategy
+| Environment | How | Requirement |
+| ----------- | --- | ----------- |
+| Chrome/Firefox/Edge (MSE) | hls.js | inject `new Player({ Hls })` |
+| Safari / iOS | native `HTMLMediaElement` | none (handled automatically) |
+| No MSE and no native HLS | unsupported | load errors with `LOAD_NOT_SUPPORTED` |
 
-| Strategy   | Best for                           | Notes                                              |
-| ---------- | ---------------------------------- | -------------------------------------------------- |
-| `html5`    | Streaming, HLS, large files        | Lower memory usage                                 |
-| `webaudio` | EQ, visualization, precise control | Decodes full file before playback                  |
-| `auto`     | General use                        | Picks `html5` for URLs/HLS, `webaudio` for buffers |
+**Background-tab timing.** `timeupdate` fires about 4×/s in the foreground. Background tabs throttle timers to about 1×/s, so the event fires less often — but the reported values stay accurate because `currentTime` is read from the audio clock, not counted per tick. For smooth animation loops, read `player.currentTime` on demand rather than depending on `timeupdate` cadence.
 
 ---
 
-## Loading Sources
+## Choosing a strategy
 
-`load()` accepts several source types. Calling `load()` again automatically cancels any in-progress loading.
+| Strategy   | Best for                              | Notes                                              |
+| ---------- | ------------------------------------- | -------------------------------------------------- |
+| `html5`    | streaming, HLS, large files           | lower memory; routed through the graph by default  |
+| `webaudio` | decoded buffers, precise timing       | requires a fully decoded `AudioBuffer`             |
+| `auto`     | general use (default)                 | URL → `html5`, `ArrayBuffer`/`Uint8Array` → `webaudio` |
+
+`player.mode` returns `"auto"` before the first load, then the resolved strategy (`"html5"` or `"webaudio"`) once a source is loaded.
 
 ```typescript
-// Plain URL
-await player.load("https://example.com/track.mp3");
+const player = new Player({
+  mode: "auto",            // "html5" | "webaudio" | "auto"
+  volume: 0.5,             // clamped to 0..1
+  muted: false,
+  loop: false,
+  playbackRate: 1,         // clamped to 0.0625..16
+  autoplay: false,
+  preload: "auto",         // "none" | "metadata" | "auto"
+  preservesPitch: true,
+  webAudioRouting: "always", // "always" | "never"
+  corsFallback: false,
+  latencyHint: "interactive",
+});
+```
 
-// File from <input type="file">
-const file = inputElement.files[0];
-await player.load(file);
+Factory shortcuts:
 
-// Blob
-await player.load(someBlob);
+```typescript
+Player.auto(options?);        // mode: "auto"
+Player.forMusic(options?);    // mode: "auto",  latencyHint: "playback"
+Player.forStreaming(options?);// mode: "html5", latencyHint: "playback", preload: "metadata"
+```
 
-// ArrayBuffer or Uint8Array — decoded via Web Audio API
-await player.load({ data: arrayBuffer });
-await player.load({ data: uint8Array });
+---
 
-// URL with custom headers (e.g. authenticated endpoints)
+## Loading sources
+
+`load()` accepts a URL string, a `File`/`Blob`, or an object form. Calling `load()` again cancels any in-progress load.
+
+```typescript
+await player.load("https://example.com/track.mp3");     // URL string
+await player.load(inputElement.files[0]);               // File
+await player.load(someBlob);                            // Blob
+await player.load({ data: arrayBuffer });               // ArrayBuffer  → webaudio
+await player.load({ data: uint8Array });                // Uint8Array   → webaudio
+
+// URL with custom headers (fetched, then played from a blob URL)
 await player.load({
   url: "https://api.example.com/audio/123",
   headers: { Authorization: "Bearer token" },
 });
 
-// HLS stream — requires hls.js peer dependency
-await player.load({
-  url: "https://example.com/stream/playlist.m3u8",
-  type: "hls",
-});
+// HLS — a .m3u8 URL is detected automatically, or set type: "hls"
+await player.load({ url: "https://example.com/stream.m3u8", type: "hls" });
+```
+
+**Per-load overrides.** The optional second argument overrides routing for a single track — useful for mixed playlists where some sources are CORS-enabled and some are not:
+
+```typescript
+await player.load(corsEnabledUrl);                          // graph on (default)
+await player.load(noCorsUrl, { webAudioRouting: "never" }); // this track: no graph
+await player.load(maybeCorsUrl, { corsFallback: true });    // retry un-routed on media error
 ```
 
 ---
 
-## HLS Streaming
+## HLS streaming
 
-Pass the `Hls` constructor when creating the player. lyra-audio treats it as an optional peer dependency and will not import it automatically.
+Inject the `Hls` constructor; lyra-audio treats it as an optional peer dependency and never imports it. On Safari, HLS also plays natively without hls.js.
 
 ```typescript
 import Hls from "hls.js";
@@ -158,197 +175,281 @@ import { Player } from "lyra-audio";
 
 const player = new Player({
   Hls,
-  hlsConfig: {
-    maxBufferLength: 30,
-    maxMaxBufferLength: 60,
-  },
+  // hlsConfig is Partial<HLSConfig> & Record<string, unknown> — known keys are
+  // typed, and any other hls.js option passes straight through to `new Hls()`.
+  hlsConfig: { maxBufferLength: 30, maxMaxBufferLength: 60 },
 });
 
 await player.load("https://example.com/live/playlist.m3u8");
 
-// Receive available quality levels once the manifest is parsed
 player.on("qualitiesavailable", (levels) => {
-  console.log("Qualities:", levels);
-  // [{ index: 0, bitrate: 500000, label: "500kbps" }, ...]
+  // QualityLevel[]: [{ index, bitrate, label, codec }, ...]
 });
 
-// Switch quality manually (-1 = auto)
 const levels = player.getQualityLevels();
-player.setQuality(levels[0].index);
+const ok = player.setQuality(levels[0].index); // returns boolean
+player.setQuality(-1);                          // -1 = auto (ABR)
 
-// Track active quality
 player.on("qualitychange", (level) => {
-  console.log("Switched to:", level.label);
+  // fired when the engine actually switches level (see note below)
 });
 ```
 
----
+> **`setQuality(level)` returns `boolean` and does not emit synchronously.** It returns `false` (no-op) for an invalid index and `true` otherwise; it never emits `qualitychange` on the spot. The real, engine-selected level arrives **asynchronously** via `qualitychange` once hls.js switches — including the ABR-chosen level after `setQuality(-1)`. Don't assume the level changed the instant the call returns; listen for `qualitychange`.
 
-## Playback Control
+### Live streams
 
 ```typescript
-await player.play();
+if (player.isLive) {
+  // Do NOT bind a progress bar to `duration`: on hls.js a live stream reports a
+  // finite, growing sliding-window duration (only native HLS/Safari reports
+  // Infinity), so `currentTime / duration` creeps upward instead of showing "live".
+  hideScrubber();
+} else {
+  showScrubber(player.currentTime / player.duration);
+}
+```
+
+`player.isLive` is the reliable signal — not `duration === Infinity`. On a live stream, `seek()` clamps to the seekable window and is a no-op when that window is empty.
+
+---
+
+## Playback control
+
+```typescript
+await player.play();      // rejects with PLAYBACK_NOT_ALLOWED if blocked
 player.pause();
-player.stop(); // pause + seek to 0
+player.stop();            // pause + reset position to 0 (state → ready)
 await player.togglePlay();
 
-// Seeking
-player.seek(30); // seek to 30 seconds
-player.seekPercent(0.5); // seek to 50% of duration
-
-// Playback rate (0.0625–16, clamped automatically)
-player.setPlaybackRate(1.5);
+player.seek(30);          // seconds (absolute)
+player.seekPercent(0.5);  // 0..1 of duration
 
 player.setLoop(true);
 
-// State and position
-console.log(player.state); // current state string
-console.log(player.currentTime); // TimeSeconds
-console.log(player.duration); // TimeSeconds
-console.log(player.isPlaying); // boolean
-console.log(player.isReady); // true when ready/playing/paused/buffering
-console.log(player.mode); // "html5" | "webaudio"
+player.state;        // PlayerState string
+player.currentTime;  // TimeSeconds
+player.duration;     // TimeSeconds
+player.isPlaying;    // boolean
+player.isReady;      // true when ready/playing/paused/buffering
+player.isLive;       // boolean (HLS live)
+player.mode;         // "auto" before load, then "html5" | "webaudio"
 ```
+
+`seeking` is emitted synchronously when you call `seek()`. `seeked` fires when the seek actually completes — from the native element event on HTML5 (asynchronous), and synchronously in the Web Audio strategy.
 
 ---
 
-## Volume & Mute
+## Rate & pitch
 
 ```typescript
-player.setVolume(0.8); // 0.0–1.0, clamped automatically
+player.setPlaybackRate(1.5); // clamped to 0.0625..16 (non-finite → 1)
+player.playbackRate;         // PlaybackRate
+
+player.setPreservesPitch(true); // applied live to the element and to future loads
+player.preservesPitch;          // your intent (boolean)
+player.canPreservePitch;        // whether the ACTIVE strategy can actually do it
+```
+
+- **HTML5** preserves pitch natively (feature-detected, with `webkit`/`moz` fallbacks); `canPreservePitch` is `true` where supported.
+- **Web Audio** shifts pitch with rate by default (resampling) and logs a one-time warning; `canPreservePitch` is `false` — unless you inject a time-stretch plugin (below), then it reports `true`.
+- Usable range is roughly `0.5×`–`2×`; extremes degrade quality.
+
+**Time-stretch plugin (Web Audio, optional).** Change tempo without pitch by injecting a `TimeStretchFactory` — dependency-injected exactly like `Hls`, so no WASM/worklet ships in the base bundle. When present and `preservesPitch` is true, the Web Audio source plays at rate 1.0 into the plugin, which owns tempo:
+
+```typescript
+import { Player, type TimeStretchFactory } from "lyra-audio";
+
+const timeStretch: TimeStretchFactory = async (ctx) => {
+  // wrap your AudioWorklet/WASM node; must implement ITimeStretchNode
+  return { node, setRate, getInputPosition, flush, dispose };
+};
+
+const player = new Player({ mode: "webaudio", timeStretch });
+```
+
+Recommended plugins (not bundled): **SoundTouchJS** worklet (MIT, light) and **Signalsmith Stretch** WASM (MIT, best quality/weight). **Rubber Band** WASM is GPL/commercial — avoid unless your license permits it. Without a plugin, Web Audio resamples (pitch shifts with rate).
+
+---
+
+## Volume & mute
+
+```typescript
+player.setVolume(0.8); // clamped to 0..1
 player.setMuted(true);
 player.toggleMute();
 
-console.log(player.volume); // Volume (0–1)
-console.log(player.muted); // boolean
+player.volume; // Volume (0..1)
+player.muted;  // boolean
 
-player.on("volumechange", ({ volume, muted }) => {
-  updateUI(volume, muted);
-});
+player.on("volumechange", ({ volume, muted }) => updateUI(volume, muted));
 ```
+
+`volume` is clamped to `0..1`; gain above unity is not available. When the graph is routed (the default), volume is applied by the graph and the underlying element/source is pinned to unity — so on routed HTML5, `element.volume` no longer reflects `player.volume`.
 
 ---
 
-## Fade Effects
+## Fades
 
-Fade methods are available after `load()` completes. If called before `load()` or after `dispose()`, they return immediately without doing anything.
+**A fade is a multiplier (0..1) applied on top of `volume`, not a change to `volume`.** Output = `volume × fadeMultiplier`. The two are independent gains: fading does not change `player.volume`, and changing `player.volume` does not cancel a running fade.
 
 ```typescript
-// Fade to a specific volume over N seconds
-await player.fadeTo(0.3, 2);
+await player.fadeTo(0.3, 2); // ramp the fade MULTIPLIER to 0.3 over 2s (volume unchanged)
+await player.fadeIn(1.5);    // multiplier → 1 (starts playback if paused)
+await player.fadeOut(1.0);   // multiplier → 0
 
-// Convenience methods
-await player.fadeIn(1.5); // fade from 0 to current volume
-await player.fadeOut(1.0); // fade to silence
+await player.fadeOutAndPause(1.0); // fade out, pause, then reset multiplier to 1 while silent
+await player.fadeOutAndStop(1.0);  // fade out, stop, then reset multiplier to 1
 
-// Fade out then pause/stop (restores volume after)
-await player.fadeOutAndPause(1.0);
-await player.fadeOutAndStop(1.0);
-
-// Cancel an in-progress fade immediately
-player.cancelFade();
-
-console.log(player.isFading); // boolean
+player.cancelFade();     // stop the ramp where it is
+player.isFading;         // boolean
+player.fadeMultiplier;   // current multiplier, 0..1 (1 when no graph)
 ```
+
+> **`fadeOut()` on its own leaves the multiplier at 0 while playback continues.** Audio stays silent, and raising `volume` will **not** restore it (they are separate gains). Recover with `fadeIn()`, or use `fadeOutAndPause()` / `fadeOutAndStop()`, which reset the multiplier to 1 while silent so the next play is at full level.
+
+Fades require a routed graph; if none is present (`webAudioRouting: 'never'` or after a CORS fallback) the fade methods resolve immediately as no-ops.
 
 ---
 
 ## Equalizer
 
-The EQ is a 10-band parametric equalizer built on `BiquadFilterNode`. It is available via `player.graph` after `load()` completes.
+A 10-band EQ on `BiquadFilterNode`, reached via `player.graph` once a routed load completes (`null` otherwise).
 
 ```typescript
-await player.load("https://example.com/song.mp3");
-
 const graph = player.graph;
-if (!graph) return; // null before load() or after dispose()
+if (!graph) return; // null before load, after dispose, or when un-routed
 
-// Band indices: 0=32Hz, 1=64Hz, 2=125Hz, 3=250Hz, 4=500Hz,
-//               5=1kHz,  6=2kHz,  7=4kHz,  8=8kHz,  9=16kHz
+// Bands: 0=32Hz 1=64Hz 2=125Hz 3=250Hz 4=500Hz 5=1kHz 6=2kHz 7=4kHz 8=8kHz 9=16kHz
+graph.setEQBand(0, 6);                          // +6 dB at 32 Hz
+graph.setEQBands([6, 4, 2, 0, 0, 0, 0, 2, 4, 6]); // all 10 at once
+graph.getEQBand(0);                              // current gain (dB)
 
-// Set individual band gain in dB
-graph.setEQBand(0, 6); // boost 32Hz by 6dB
-graph.setEQBand(9, -3); // cut 16kHz by 3dB
-
-// Set all 10 bands at once
-graph.setEQBands([6, 4, 2, 0, 0, 0, 0, 2, 4, 6]);
-
-// Read current gain of a band
-const bassGain = graph.getEQBand(0);
-
-// Toggle EQ processing (bands retain their values when disabled)
-graph.setEQEnabled(false);
-graph.setEQEnabled(true);
-console.log(graph.eqEnabled); // boolean
-
-// Reset all bands to 0dB
-graph.resetEQ();
-
-// Inspect current band config
-console.log(graph.bands);
-// [{ frequency: 32, gain: 0, Q: 1, type: "lowshelf" }, ...]
+graph.setEQEnabled(false); // bands keep their values while bypassed
+graph.eqEnabled;           // boolean
+graph.resetEQ();           // all bands → 0 dB
+graph.bands;               // EQBand[] current config
 ```
 
-If you are certain `load()` has already been called, you can use `graphOrThrow` to skip the null check:
-
-```typescript
-// Throws a descriptive error if graph is not ready instead of silent null
-player.graphOrThrow.setEQBand(0, 6);
-```
+Use `player.graphOrThrow` to skip the null check when you know a routed load has completed (it throws a descriptive error otherwise).
 
 ---
 
-## Audio Visualization
+## Visualization
 
-`getFrequencyData()` and `getTimeDomainData()` return a reference to the same internal `Uint8Array` on every call. Copy it with `.slice()` if you need to hold the data across frames.
+`getFrequencyData()` / `getTimeDomainData()` return the **same internal `Uint8Array`** each call — `.slice()` if you need to keep a frame.
 
 ```typescript
-const graph = player.graph;
-if (!graph) return;
-
 function draw() {
-  if (!player.graph) return;
+  const graph = player.graph;
+  if (!graph) return;
 
-  // Frequency spectrum — 0–255 per bin
-  const freqData = graph.getFrequencyData();
+  const freq = graph.getFrequencyData();   // 0..255 per bin
+  const wave = graph.getTimeDomainData();  // 0..255, 128 = silence
 
-  // Waveform — 0–255, 128 = silence
-  const timeData = graph.getTimeDomainData();
-
-  // Snapshot if you need to store it:
-  const snapshot = freqData.slice();
-
-  renderVisualizer(freqData, timeData);
+  render(freq, wave);
   requestAnimationFrame(draw);
 }
-
 draw();
 
-// Configure the AnalyserNode directly
-graph.analyzer.fftSize = 4096;
-graph.analyzer.smoothingTimeConstant = 0.85;
+graph.analyzer.fftSize = 4096; // configure the AnalyserNode directly
 ```
 
-You can also pass analyser options when constructing `AudioGraph` directly:
+You can also construct an `AudioGraph` with analyser options:
 
 ```typescript
 import { AudioGraph } from "lyra-audio";
-
-const graph = new AudioGraph(audioContext, {
-  analyser: {
-    fftSize: 4096,
-    smoothingTimeConstant: 0.85,
-    minDecibels: -90,
-    maxDecibels: -10,
-  },
+const g = new AudioGraph(audioContext, {
+  analyser: { fftSize: 4096, smoothingTimeConstant: 0.85, minDecibels: -90, maxDecibels: -10 },
 });
 ```
 
 ---
 
+## Loudness normalization
+
+Normalize per-track loudness toward a target LUFS. It is **off by default** and driven by metadata you supply (lyra-audio does not measure loudness itself). The normalization gain sits inside the graph, so it requires a routed load.
+
+```typescript
+const player = new Player({
+  loudnessNormalization: {
+    enabled: true,
+    targetLufs: -16,          // default -16
+    preventClipping: true,    // default true (uses truePeak + headroom)
+    headroomDb: 1,            // default 1
+    maxGainDb: 12,            // default 12  (cap on boost)
+    maxAttenuationDb: 24,     // default 24  (cap on cut)
+    smoothTimeSec: 0.05,      // default 0.05 (ramp time)
+    retainMetadataAcrossLoads: false, // default false (metadata cleared each load)
+  },
+});
+
+await player.load("https://example.com/track.mp3");
+
+// Supply the track's measured loudness; the gain is (re)computed and ramped in.
+player.setLoudnessMetadata({ integratedLufs: -9.5, truePeakDbtp: -0.3 });
+
+player.on("normalizationchange", ({ enabled, gainDb, targetLufs, metadata }) => {
+  console.log(`normalization ${enabled ? "on" : "off"}: ${gainDb.toFixed(1)} dB`);
+});
+```
+
+Runtime controls (each recomputes and re-applies the gain):
+
+```typescript
+player.setNormalizationEnabled(true);
+player.setTargetLufs(-14);
+player.setNormalizationOptions({ maxGainDb: 6 });
+player.setLoudnessMetadata({ integratedLufs: -12 });
+player.getLoudnessMetadata();          // LoudnessMetadata | null
+player.clearLoudnessMetadata();
+player.recomputeNormalization();
+player.resetNormalization();           // gain → 0 dB, emits normalizationchange(enabled:false)
+
+player.normalizationEnabled;           // boolean
+player.targetLufs;                     // number
+player.normalizationOptions;           // resolved options
+player.getAppliedNormalizationGainDb(); // gain currently on the graph (dB)
+```
+
+By default metadata is per-track: it is cleared on every `load()` so a new track starts at 0 dB until you set its metadata. Set `retainMetadataAcrossLoads: true` to carry it across loads (e.g. album-level).
+
+---
+
+## AudioContext management
+
+```typescript
+// Warm up / unlock the context inside a user gesture (no track needed).
+// Resolves when the context is running, or rejects with PLAYBACK_NOT_ALLOWED
+// after ~2s if it never starts. Safe to call repeatedly.
+await player.unlockAudio();
+
+await player.freezeAudioContext();    // suspend()
+await player.unfreezeAudioContext();  // resume()
+player.isAudioContextFrozen();        // boolean (state === "suspended")
+
+await player.getAudioContext();       // resolves a running context (lazy-created)
+player.audioContext;                  // the AudioContext (lazy-created on access)
+
+player.on("contextinterrupted", () => {}); // e.g. iOS phone call
+player.on("contextresumed", () => {});      // auto-resumed after interruption
+```
+
+**Sharing a context across players.** Inject an existing `AudioContext` to stay under iOS context limits or share unlock state:
+
+```typescript
+const shared = new AudioContext();
+const a = new Player({ audioContext: shared });
+const b = new Player({ audioContext: shared });
+```
+
+An injected context is used as-is (`latencyHint` is ignored), is **never closed** on `dispose()` (the caller owns its lifecycle — only player-created contexts are closed), and throws `PLAYBACK_FAILED` if it is already closed. lyra-audio registers its state-change listener with `addEventListener`, so your own `onstatechange`/listeners on the shared context are preserved.
+
+---
+
 ## Cancellation
 
-Calling `load()` again automatically cancels any in-progress load. For manual control use `CancellationToken`:
+Calling `load()` again auto-cancels the in-flight load. For manual control use `CancellationToken`:
 
 ```typescript
 import { CancellationToken, CancellationError } from "lyra-audio";
@@ -356,290 +457,244 @@ import { CancellationToken, CancellationError } from "lyra-audio";
 let token = new CancellationToken();
 
 async function loadTrack(url: string) {
-  token.cancel();
-  token = new CancellationToken();
-
+  token = CancellationToken.replace(token); // cancels the old token, returns a fresh one
   try {
     await token.wrap(player.load(url));
   } catch (err) {
-    if (err instanceof CancellationError) {
-      console.log("Load cancelled");
-    }
+    if (err instanceof CancellationError) console.log("Load cancelled");
   }
 }
-```
 
-```typescript
-const token = new CancellationToken();
-
-token.isCancelled; // false
+token.isCancelled;      // boolean
 token.cancel();
-token.isCancelled; // true
-token.throwIfCancelled(); // throws CancellationError
-
-// Wrap any Promise to make it cancellation-aware
-await token.wrap(somePromise);
-
-// Cancel old token and get a fresh one
-// Always capture the return value — the old token is cancelled and unusable
-token = CancellationToken.replace(token);
+token.throwIfCancelled(); // throws CancellationError if cancelled
+token.signal;             // underlying AbortSignal
 ```
 
 ---
 
 ## Events
 
-`player.on()` returns an unsubscribe function.
+`player.on(event, cb)` returns an unsubscribe function. `player.waitFor(event, { timeout?, signal? })` returns a Promise.
 
 ```typescript
-const unsubscribe = player.on("canplay", () => {
-  console.log("Ready!");
-  unsubscribe();
-});
-
-// Wait for a single event (Promise-based)
-const { duration } = await player.waitFor("loadedmetadata", {
-  timeout: 5000,
-  signal: abortController.signal,
-});
+const off = player.on("canplay", () => off());
+const { duration } = await player.waitFor("loadedmetadata", { timeout: 5000 });
 ```
 
-### Event reference
-
-```typescript
-// ── Lifecycle ──────────────────────────────────────────────────────────────
-player.on("loadstart", () => {});
-player.on("loadedmetadata", ({ duration }) => {}); // fired before canplay
-player.on("canplay", () => {});
-player.on("canplaythrough", () => {}); // enough data to play to end
-
-// ── Playback ───────────────────────────────────────────────────────────────
-player.on("play", () => {}); // play() was called
-player.on("playing", () => {}); // audio is actually producing output
-player.on("pause", () => {});
-player.on("ended", () => {});
-player.on("stop", () => {});
-
-// ── Time ───────────────────────────────────────────────────────────────────
-player.on("timeupdate", ({ currentTime, duration, progress }) => {
-  // progress: 0–1
-});
-player.on("durationchange", (duration) => {});
-player.on("seeking", (time) => {});
-player.on("seeked", (time) => {});
-
-// ── Buffering ─────────────────────────────────────────────────────────────
-player.on("waiting", () => {}); // buffering started, playback stalled
-player.on("buffered", () => {}); // buffering ended, playback resumed
-
-// ── State ─────────────────────────────────────────────────────────────────
-player.on("statechange", ({ from, to }) => {});
-
-// ── Volume ────────────────────────────────────────────────────────────────
-player.on("volumechange", ({ volume, muted }) => {});
-player.on("ratechange", (rate) => {});
-
-// ── Quality (HLS only) ────────────────────────────────────────────────────
-player.on("qualitiesavailable", (levels) => {}); // QualityLevel[]
-player.on("qualitychange", (level) => {}); // QualityLevel
-
-// ── Errors ────────────────────────────────────────────────────────────────
-player.on("error", ({ code, message, cause }) => {});
-
-// ── Cleanup ───────────────────────────────────────────────────────────────
-player.on("dispose", () => {});
-```
+| Event | Payload | Notes |
+| ----- | ------- | ----- |
+| `loadstart` | — | load began |
+| `loadedmetadata` | `{ duration }` | before `canplay` |
+| `canplay` | — | ready to start |
+| `canplaythrough` | — | enough buffered to finish |
+| `play` | — | `play()` was invoked |
+| `playing` | — | output actually started |
+| `pause` | — | |
+| `ended` | — | |
+| `stop` | — | `stop()` was invoked |
+| `timeupdate` | `{ currentTime, duration, progress }` | ~4×/s (throttled in background tabs) |
+| `durationchange` | `TimeSeconds` | |
+| `seeking` | `TimeSeconds` | synchronous on `seek()` |
+| `seeked` | `TimeSeconds` | HTML5: async native; Web Audio: sync |
+| `waiting` | — | buffering started (stalled) |
+| `buffered` | — | buffering ended |
+| `progress` | `{ buffered, percent }` | reserved — declared in `PlayerEventMap` but not currently emitted |
+| `statechange` | `{ from, to }` | |
+| `volumechange` | `{ volume, muted }` | |
+| `ratechange` | `PlaybackRate` | |
+| `qualitiesavailable` | `QualityLevel[]` | HLS |
+| `qualitychange` | `QualityLevel` | HLS, async (engine-driven) |
+| `normalizationchange` | `{ enabled, gainDb, targetLufs, metadata }` | |
+| `contextinterrupted` | — | |
+| `contextresumed` | — | |
+| `error` | `{ code, message, cause? }` | |
+| `dispose` | — | |
 
 ---
 
-## Error Handling
+## Error handling
 
-All errors include a `PlayerErrorCode`:
+Errors surface through the `error` event (and `load()`/`play()` also reject) as a `PlayerError` carrying a `PlayerErrorCode`.
 
 ```typescript
 import { PlayerErrorCode, PlayerError } from "lyra-audio";
 
 player.on("error", ({ code, message, cause }) => {
   switch (code) {
-    case PlayerErrorCode.LOAD_ABORTED:
-      // Cancelled — usually safe to ignore
-      break;
-    case PlayerErrorCode.LOAD_NETWORK:
-      showToast("Network error. Check your connection.");
-      break;
-    case PlayerErrorCode.LOAD_DECODE:
-      showToast("Could not decode audio file.");
-      break;
-    case PlayerErrorCode.LOAD_NOT_SUPPORTED:
-      showToast("Audio format not supported.");
-      break;
-    case PlayerErrorCode.PLAYBACK_NOT_ALLOWED:
-      // Browser autoplay policy — a user gesture is required
-      showPlayButton();
-      break;
-    case PlayerErrorCode.PLAYBACK_FAILED:
-      showToast("Playback failed.");
-      break;
+    case PlayerErrorCode.LOAD_ABORTED:       break; // superseded/cancelled — usually ignorable
+    case PlayerErrorCode.LOAD_NETWORK:       /* ... */ break;
+    case PlayerErrorCode.LOAD_DECODE:        /* ... */ break;
+    case PlayerErrorCode.LOAD_NOT_SUPPORTED: /* ... */ break;
+    case PlayerErrorCode.PLAYBACK_NOT_ALLOWED: showPlayButton(); break; // gesture required
+    case PlayerErrorCode.PLAYBACK_FAILED:    /* ... */ break;
     case PlayerErrorCode.HLS_FATAL:
     case PlayerErrorCode.HLS_NETWORK:
-    case PlayerErrorCode.HLS_MEDIA:
-      showToast("Streaming error.");
-      break;
+    case PlayerErrorCode.HLS_MEDIA:          /* ... */ break;
+    case PlayerErrorCode.UNKNOWN:            /* ... */ break;
   }
 });
 
-// load() and play() also throw — wrap in try/catch if needed
 try {
   await player.load(url);
   await player.play();
 } catch (err) {
-  if (err instanceof PlayerError) {
-    console.error(err.code, err.message, err.cause);
-  }
+  if (err instanceof PlayerError) console.error(err.code, err.message, err.cause);
 }
 ```
 
+Note: with `autoplay: true`, a blocked autoplay is reported via one `error` event with `PLAYBACK_NOT_ALLOWED` and does **not** reject `load()` (see [Browser support](#browser-support--limitations)).
+
 ---
 
-## Player State
+## Player state
 
-The player follows a strict state machine. Invalid transitions are ignored with a console warning.
+A strict state machine; invalid transitions are ignored with a console warning (never thrown). `disposed` is terminal.
 
 ```
-idle ──► loading ──► ready ──► playing ──► paused
-  ▲         │           │         │           │
-  └─────────┴───────────┴────► error ◄────────┘
-                                  │
-                               disposed
+idle ──► loading ──► ready ──► playing ⇄ paused
+                       ▲          │        │
+                       └──────────┴──► buffering
+   (any) ──► error ──► loading            │
+   (any) ──► disposed
 ```
 
-| State       | Meaning                                               |
-| ----------- | ----------------------------------------------------- |
-| `idle`      | Initial state, nothing loaded                         |
-| `loading`   | `load()` in progress                                  |
-| `ready`     | Loaded and ready to play (also after `stop()`)        |
-| `playing`   | Audio is playing                                      |
-| `paused`    | Paused mid-playback                                   |
-| `buffering` | Playing but stalled waiting for data                  |
-| `error`     | An error occurred — recover by calling `load()` again |
-| `disposed`  | `dispose()` was called — player is unusable           |
+| State | Meaning |
+| ----- | ------- |
+| `idle` | initial; nothing loaded |
+| `loading` | `load()` in progress |
+| `ready` | loaded and ready (also after `stop()`) |
+| `playing` | producing output |
+| `paused` | paused mid-playback |
+| `buffering` | playing but stalled for data |
+| `error` | recover by calling `load()` again |
+| `disposed` | `dispose()` called — unusable |
 
 ```typescript
-console.log(player.state);
-
-player.on("statechange", ({ from, to }) => {
-  console.log(`${from} → ${to}`);
-});
+player.on("statechange", ({ from, to }) => console.log(`${from} → ${to}`));
 ```
 
 ---
 
-## TypeScript: Branded Types
+## TypeScript: branded types
 
-lyra-audio uses branded primitive types to prevent accidentally passing a raw number where a typed value is expected:
+Public numeric values use branded types so a raw number is not accidentally passed where a validated one is expected. The setter methods (`setVolume`, `seek`, `setPlaybackRate`, …) accept plain `number` and brand internally; the branded factories are for constructing values you pass into event-typed positions.
 
 ```typescript
-import {
-  createVolume,
-  createTimeSeconds,
-  createPlaybackRate,
-  type Volume,
-  type TimeSeconds,
-  type PlaybackRate,
-} from "lyra-audio";
+import { createVolume, createTimeSeconds, createPlaybackRate, type Volume } from "lyra-audio";
 
-// Constructors validate and clamp values
-const vol = createVolume(1.5); // clamped to 1.0
-const time = createTimeSeconds(-5); // clamped to 0
-const rate = createPlaybackRate(2); // clamped to 0.0625–16
+createVolume(1.5);       // clamped to 1.0
+createTimeSeconds(-5);   // clamped to 0
+createPlaybackRate(2);   // clamped to 0.0625..16 (non-finite → 1)
 
-// Plain number is not assignable to a branded type
-const v: Volume = 0.5; // TS error
-const v: Volume = createVolume(0.5); // ✅
-
-// Event payloads already use branded types
-player.on("timeupdate", ({ currentTime, duration }) => {
-  const mid = createTimeSeconds(duration / 2);
-  player.seek(mid);
-});
+const v: Volume = 0.5;              // ✗ TS error
+const ok: Volume = createVolume(0.5); // ✓
 ```
 
 ---
 
-## API Reference
+## Bundle size & tree-shaking
+
+The published ESM entry is about **20 KB gzipped**. The package sets `"sideEffects": false` and is fully tree-shakeable: importing only `PlayerError` shakes the dist down to under 2 KB (the `Player`, strategies, handlers, `AudioGraph`, and logger all drop out). `hls.js` is an external peer dependency and is never bundled.
+
+---
+
+## API reference
 
 ### `Player`
 
-| Method / Property               | Type                 | Description                                |
-| ------------------------------- | -------------------- | ------------------------------------------ |
-| `Player.auto(options?)`         | static               | Factory: auto strategy                     |
-| `Player.forMusic(options?)`     | static               | Factory: latencyHint "playback"            |
-| `Player.forStreaming(options?)` | static               | Factory: HTML5, metadata preload           |
-| `load(source)`                  | `Promise<void>`      | Load a source. Cancels any previous load.  |
-| `play()`                        | `Promise<void>`      | Start or resume playback                   |
-| `pause()`                       | `void`               | Pause playback                             |
-| `stop()`                        | `void`               | Pause and seek to 0                        |
-| `togglePlay()`                  | `Promise<void>`      | Toggle play/pause                          |
-| `seek(seconds)`                 | `void`               | Seek to absolute position                  |
-| `seekPercent(0–1)`              | `void`               | Seek to relative position                  |
-| `setVolume(0–1)`                | `void`               | Set volume (clamped automatically)         |
-| `setMuted(bool)`                | `void`               | Set mute state                             |
-| `toggleMute()`                  | `void`               | Toggle mute                                |
-| `setPlaybackRate(rate)`         | `void`               | Set speed (clamped to 0.0625–16)           |
-| `setLoop(bool)`                 | `void`               | Enable/disable loop                        |
-| `fadeTo(vol, sec)`              | `Promise<void>`      | Fade to volume over duration               |
-| `fadeIn(sec)`                   | `Promise<void>`      | Fade from 0 to current volume              |
-| `fadeOut(sec)`                  | `Promise<void>`      | Fade to silence                            |
-| `fadeOutAndPause(sec)`          | `Promise<void>`      | Fade out then pause                        |
-| `fadeOutAndStop(sec)`           | `Promise<void>`      | Fade out then stop                         |
-| `cancelFade()`                  | `void`               | Cancel in-progress fade                    |
-| `getQualityLevels()`            | `QualityLevel[]`     | HLS quality levels                         |
-| `setQuality(index)`             | `void`               | Select HLS quality level                   |
-| `getCurrentQuality()`           | `number`             | Current HLS quality index (-1 = auto)      |
-| `dispose()`                     | `Promise<void>`      | Release all resources                      |
-| `state`                         | `PlayerState`        | Current state                              |
-| `currentTime`                   | `TimeSeconds`        | Current playback position                  |
-| `duration`                      | `TimeSeconds`        | Total duration                             |
-| `volume`                        | `Volume`             | Current volume (0–1)                       |
-| `muted`                         | `boolean`            | Mute state                                 |
-| `playbackRate`                  | `PlaybackRate`       | Current playback rate                      |
-| `loop`                          | `boolean`            | Loop state                                 |
-| `isPlaying`                     | `boolean`            | True if currently playing                  |
-| `isReady`                       | `boolean`            | True if ready/playing/paused/buffering     |
-| `isFading`                      | `boolean`            | True if a fade is in progress              |
-| `mode`                          | `PlaybackMode`       | Active strategy: `"html5"` \| `"webaudio"` |
-| `graph`                         | `AudioGraph \| null` | Audio graph — available after `load()`     |
-| `graphOrThrow`                  | `AudioGraph`         | Same, but throws if not ready              |
-| `audioContext`                  | `AudioContext`       | Underlying AudioContext (lazy-created)     |
+| Member | Type | Description |
+| ------ | ---- | ----------- |
+| `Player.auto(options?)` | static | factory: `mode: "auto"` |
+| `Player.forMusic(options?)` | static | factory: `latencyHint: "playback"` |
+| `Player.forStreaming(options?)` | static | factory: HTML5, `preload: "metadata"` |
+| `registerHandler(handler)` | `void` | prepend a custom `ISourceHandler` |
+| `load(source, loadOptions?)` | `Promise<void>` | load a source; cancels any prior load; optional per-load `{ webAudioRouting, corsFallback }` |
+| `play()` | `Promise<void>` | start/resume; rejects `PLAYBACK_NOT_ALLOWED` if blocked |
+| `pause()` | `void` | |
+| `stop()` | `void` | pause + reset to 0 |
+| `togglePlay()` | `Promise<void>` | |
+| `seek(seconds)` | `void` | clamps to duration (or live seekable window) |
+| `seekPercent(0..1)` | `void` | |
+| `setVolume(0..1)` | `void` | clamped |
+| `setMuted(bool)` / `toggleMute()` | `void` | |
+| `setPlaybackRate(rate)` | `void` | clamped 0.0625..16 |
+| `setLoop(bool)` | `void` | |
+| `setPreservesPitch(bool)` | `void` | applied live + to future loads |
+| `fadeTo(mult, sec?)` | `Promise<void>` | ramp the fade multiplier (0..1) |
+| `fadeIn(sec?)` / `fadeOut(sec?)` | `Promise<void>` | multiplier → 1 / → 0 |
+| `fadeOutAndPause(sec?)` / `fadeOutAndStop(sec?)` | `Promise<void>` | fade out, then pause/stop, reset multiplier |
+| `cancelFade()` | `void` | |
+| `unlockAudio()` | `Promise<void>` | resolve when running, else reject `PLAYBACK_NOT_ALLOWED` (~2s) |
+| `getAudioContext()` | `Promise<AudioContext>` | resolves a running context |
+| `freezeAudioContext()` / `unfreezeAudioContext()` | `Promise<void>` | suspend / resume |
+| `isAudioContextFrozen()` | `boolean` | |
+| `getQualityLevels()` | `QualityLevel[]` | HLS |
+| `setQuality(index)` | `boolean` | `-1` = auto; `false` on invalid index; emits async |
+| `getCurrentQuality()` | `number` | `-1` = auto |
+| `setLoudnessMetadata(meta \| null)` | `void` | |
+| `getLoudnessMetadata()` | `LoudnessMetadata \| null` | |
+| `clearLoudnessMetadata()` | `void` | |
+| `setNormalizationEnabled(bool)` | `void` | |
+| `setTargetLufs(n)` | `void` | |
+| `setNormalizationOptions(opts)` | `void` | |
+| `recomputeNormalization()` / `resetNormalization()` | `void` | |
+| `getAppliedNormalizationGainDb()` | `number` | |
+| `dispose()` | `Promise<void>` | |
+| `state` | `PlayerState` | |
+| `currentTime` / `duration` | `TimeSeconds` | |
+| `volume` | `Volume` | `muted` `boolean` |
+| `playbackRate` | `PlaybackRate` | `loop` `boolean` |
+| `preservesPitch` | `boolean` | your intent |
+| `canPreservePitch` | `boolean` | active strategy capability |
+| `isPlaying` / `isReady` / `isLive` / `isFading` | `boolean` | |
+| `fadeMultiplier` | `number` | 0..1 (1 when no graph) |
+| `normalizationEnabled` / `targetLufs` / `normalizationOptions` | | current normalization config |
+| `mode` | `PlaybackMode` | `"auto"` before load, then `"html5"`/`"webaudio"` |
+| `graph` | `AudioGraph \| null` | routed graph, else `null` |
+| `graphOrThrow` | `AudioGraph` | throws if not ready |
+| `audioContext` | `AudioContext` | lazy-created |
+| `on(event, cb)` | `() => void` | returns unsubscribe |
+| `waitFor(event, opts?)` | `Promise` | `{ timeout?, signal? }` |
 
 ### `AudioGraph`
 
-| Method / Property         | Type            | Description                                        |
-| ------------------------- | --------------- | -------------------------------------------------- |
-| `setEQBand(index, dB)`    | `void`          | Set single band gain in dB                         |
-| `setEQBands(gains[])`     | `void`          | Set all 10 bands at once                           |
-| `getEQBand(index)`        | `number`        | Get current gain for a band                        |
-| `resetEQ()`               | `void`          | Reset all bands to 0dB                             |
-| `setEQEnabled(bool)`      | `void`          | Toggle EQ processing                               |
-| `setVolume(0–1)`          | `void`          | Set output volume                                  |
-| `fadeTo(vol, sec, from?)` | `Promise<void>` | Fade output volume                                 |
-| `cancelFade()`            | `void`          | Cancel in-progress fade                            |
-| `getFrequencyData()`      | `Uint8Array`    | Frequency spectrum (live buffer — copy if storing) |
-| `getTimeDomainData()`     | `Uint8Array`    | Waveform data (live buffer — copy if storing)      |
-| `eqEnabled`               | `boolean`       | Whether EQ is active                               |
-| `bands`                   | `EQBand[]`      | Current band configuration                         |
-| `isFading`                | `boolean`       | Whether a fade is running                          |
-| `input`                   | `AudioNode`     | Graph input node                                   |
-| `output`                  | `AudioNode`     | Graph output node                                  |
-| `analyzer`                | `AnalyserNode`  | Direct access for custom configuration             |
+| Member | Type | Description |
+| ------ | ---- | ----------- |
+| `setEQBand(index, dB)` / `setEQBands(dB[])` | `void` | |
+| `getEQBand(index)` | `number` | |
+| `resetEQ()` / `setEQEnabled(bool)` | `void` | |
+| `setVolume(0..1)` / `setVolumeImmediate(0..1)` | `void` | drives the volume gain (clamped) |
+| `fadeTo(mult, sec, from?)` | `Promise<void>` | ramp the fade multiplier |
+| `cancelFade()` | `void` | |
+| `setNormalizationGainDb(dB)` / `setNormalizationGainDbSmooth(dB, sec?)` | `void` | |
+| `getNormalizationGainDb()` / `resetNormalization()` | | |
+| `getFrequencyData()` / `getTimeDomainData()` | `Uint8Array` | live buffer — copy if storing |
+| `eqEnabled` / `isFading` | `boolean` | |
+| `fadeMultiplier` | `number` | 0..1 |
+| `bands` | `EQBand[]` | |
+| `input` / `output` | `AudioNode` | `output` is the volume gain (end of chain) |
+| `analyzer` | `AnalyserNode` | |
 
 ### `CancellationToken`
 
-| Method / Property                | Type          | Description                                            |
-| -------------------------------- | ------------- | ------------------------------------------------------ |
-| `cancel()`                       | `void`        | Cancel the token                                       |
-| `isCancelled`                    | `boolean`     | Whether the token is cancelled                         |
-| `throwIfCancelled()`             | `void`        | Throws `CancellationError` if cancelled                |
-| `wrap(promise)`                  | `Promise<T>`  | Rejects with `CancellationError` if token is cancelled |
-| `signal`                         | `AbortSignal` | Underlying AbortSignal                                 |
-| `CancellationToken.replace(old)` | static        | Cancels old token, returns a new one                   |
+| Member | Type | Description |
+| ------ | ---- | ----------- |
+| `cancel()` | `void` | |
+| `isCancelled` | `boolean` | |
+| `throwIfCancelled()` | `void` | throws `CancellationError` |
+| `wrap(promise)` | `Promise<T>` | rejects `CancellationError` if cancelled |
+| `signal` | `AbortSignal` | |
+| `CancellationToken.replace(old)` | static | cancels `old`, returns a fresh token |
+
+### Exports
+
+`Player`, `PlayerError`, `PlayerErrorCode`, `CancellationToken`, `CancellationError`, `AudioGraph`, `normalizeSource`, `DEFAULT_OPTIONS`, `createVolume`/`createTimeSeconds`/`createPlaybackRate`, and the types `PlayerOptions`, `LoadOptions`, `PlayerState`, `PlaybackMode`, `AudioFormat`, `AudioSourceType`, `AudioSource`, `AudioSourceInput`, `QualityLevel`, `HLSConfig`, `Volume`/`TimeSeconds`/`PlaybackRate`, `PlayerEventMap`, `PlayerEventName`, `TimeUpdatePayload`, `VolumeChangePayload`, `BufferPayload`, `ErrorPayload`, `ITimeStretchNode`, `TimeStretchFactory`.
+
+**Advanced / internal-ish exports** (for extension and testing; most apps only need `Player`): `EventEmitter`, `StateManager`, `HTML5Strategy`, `WebAudioStrategy`, `SourceManager`, `UrlHandler`, `BlobHandler`, `BufferHandler`, `HLSHandler`, `NativeHlsHandler`, and the types `IPlaybackStrategy`, `StrategyInitOptions`, `PlaybackStrategyEvents`, `ISourceHandler`, `PreparedSource`, `SourceCapabilities`.
+
+---
+
+## Migration
+
+Several contracts changed since early versions — see the [CHANGELOG](./CHANGELOG.md) for the full list and upgrade notes. Highlights: `load()` no longer rejects when only autoplay is blocked; `fadeTo`/`fadeOut` drive a fade **multiplier** independent of `volume`; `setQuality()` returns `boolean` and emits `qualitychange` asynchronously; `mode` returns `"auto"` before the first load.
