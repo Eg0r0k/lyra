@@ -66,6 +66,24 @@ describe("AudioGraph", () => {
     expect(graph.getEQBand(2)).toBe(0);
   });
 
+  it("uses a smoothed param ramp for EQ band updates (T-17/F-21)", () => {
+    const ctx = new MockAudioContext();
+    const graph = new AudioGraph(ctx as unknown as AudioContext);
+    const band0 = ctx.createdBiquadFilters[0] as unknown as {
+      gain: { setTargetAtTime: Mock; setValueAtTime: Mock };
+    };
+
+    graph.setEQBand(0, 6);
+
+    // Smoothed ramp, not a step, to avoid zipper noise on slider drags.
+    expect(band0.gain.setTargetAtTime).toHaveBeenCalledWith(
+      6,
+      expect.any(Number),
+      0.015,
+    );
+    expect(band0.gain.setValueAtTime).not.toHaveBeenCalled();
+  });
+
   it("toggles EQ enabled state", () => {
     const graph = new AudioGraph(new MockAudioContext() as unknown as AudioContext);
 

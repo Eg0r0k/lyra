@@ -109,6 +109,7 @@ export class MockAudioContext extends EventTarget {
     new MockAudioNode() as unknown as AudioDestinationNode;
   public readonly createdGains: MockGainNode[] = [];
   public readonly createdBufferSources: MockBufferSourceNode[] = [];
+  public readonly createdBiquadFilters: MockBiquadFilterNode[] = [];
   private readonly _statechangeListeners = new Set<EventListenerOrEventListenerObject>();
 
   constructor(_options?: AudioContextOptions) {
@@ -161,7 +162,9 @@ export class MockAudioContext extends EventTarget {
   }
 
   public createBiquadFilter(): BiquadFilterNode {
-    return new MockBiquadFilterNode() as unknown as BiquadFilterNode;
+    const node = new MockBiquadFilterNode();
+    this.createdBiquadFilters.push(node);
+    return node as unknown as BiquadFilterNode;
   }
 
   public createMediaElementSource(

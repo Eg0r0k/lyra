@@ -175,7 +175,12 @@ export class AudioGraph {
     this._bands[index].gain = gain;
 
     if (this._eqEnabled) {
-      this._eqFilters[index].gain.setValueAtTime(gain, this._ctx.currentTime);
+      // Smooth ramp (matches setEQEnabled) to avoid zipper noise on slider drags (F-21).
+      this._eqFilters[index].gain.setTargetAtTime(
+        gain,
+        this._ctx.currentTime,
+        0.015,
+      );
     }
   }
 
@@ -191,7 +196,8 @@ export class AudioGraph {
     this._bands.forEach((band, i) => {
       band.gain = 0;
       if (this._eqEnabled) {
-        this._eqFilters[i].gain.setValueAtTime(0, this._ctx.currentTime);
+        // Smooth ramp (matches setEQEnabled) to avoid zipper noise (F-21).
+        this._eqFilters[i].gain.setTargetAtTime(0, this._ctx.currentTime, 0.015);
       }
     });
   }
