@@ -40,6 +40,13 @@ interface HlsLevelSwitchedData {
   level?: number;
 }
 
+/**
+ * Fatal network errors: up to 3 startLoad() retries with 1s/2s/4s backoff.
+ * Module-level (not a class static) so the lowered field assignment doesn't
+ * pin HLSHandler against tree-shaking in the single-file dist (T-21).
+ */
+const MAX_NETWORK_RETRIES = 3;
+
 export class HLSHandler implements ISourceHandler {
   readonly id = "hls";
   private _hls: HlsInstance | null = null;
@@ -62,9 +69,6 @@ export class HLSHandler implements ISourceHandler {
   private _networkRetries = 0;
   /** 0 = none, 1 = did recoverMediaError, 2 = did swapAudioCodec+recover. */
   private _mediaRecoveryStage = 0;
-
-  /** Fatal network errors: up to 3 startLoad() retries with 1s/2s/4s backoff. */
-  private static readonly MAX_NETWORK_RETRIES = 3;
 
   constructor(
     config?: Partial<HLSConfig> & Record<string, unknown>,
@@ -314,12 +318,12 @@ export class HLSHandler implements ISourceHandler {
     if (!Hls || !hls) return;
 
     if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-      if (this._networkRetries < HLSHandler.MAX_NETWORK_RETRIES) {
+      if (this._networkRetries < MAX_NETWORK_RETRIES) {
         const attempt = this._networkRetries;
         this._networkRetries += 1;
         const delayMs = 1000 * 2 ** attempt; // 1s, 2s, 4s
         playerLogger.debug(
-          `HLS fatal network error — retry ${attempt + 1}/${HLSHandler.MAX_NETWORK_RETRIES} in ${delayMs}ms`,
+          `HLS fatal network error — retry ${attempt + 1}/${MAX_NETWORK_RETRIES} in ${delayMs}ms`,
         );
         this._backoffTimer = setTimeout(() => {
           this._backoffTimer = null;

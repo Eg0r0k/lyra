@@ -17,6 +17,13 @@ const PITCH_PROPS = [
 ] as const;
 
 /**
+ * Default readiness timeout, shared by every initialize() path (F-09).
+ * Module-level (not a class static) so the lowered field assignment doesn't
+ * pin HTML5Strategy against tree-shaking in the single-file dist (T-21).
+ */
+const READINESS_TIMEOUT_MS = 30_000;
+
+/**
  * HTML5-based playback strategy built on top of the native
  * {@link HTMLAudioElement} API.
  *
@@ -197,13 +204,10 @@ export class HTML5Strategy
     this._isReady = true;
   }
 
-  /** Default readiness timeout. Shared by every initialize() path (F-09). */
-  private static readonly READINESS_TIMEOUT_MS = 30_000;
-
   /**
    * Resolves on the earliest of `loadedmetadata` / `canplay`, rejects on the
    * element `error`, on `signal` abort ({@link DOMException} `AbortError`), or on
-   * a {@link HTML5Strategy.READINESS_TIMEOUT_MS} timeout
+   * a {@link READINESS_TIMEOUT_MS} timeout
    * ({@link PlayerErrorCode.LOAD_NETWORK}). Always removes its listeners + timer.
    */
   private waitForReady(signal: AbortSignal): Promise<void> {
@@ -236,11 +240,11 @@ export class HTML5Strategy
         cleanup();
         reject(
           new PlayerError(
-            `Media readiness timed out after ${HTML5Strategy.READINESS_TIMEOUT_MS}ms`,
+            `Media readiness timed out after ${READINESS_TIMEOUT_MS}ms`,
             PlayerErrorCode.LOAD_NETWORK,
           ),
         );
-      }, HTML5Strategy.READINESS_TIMEOUT_MS);
+      }, READINESS_TIMEOUT_MS);
 
       this._activeInitCleanup = cleanup;
 
