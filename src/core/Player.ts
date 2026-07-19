@@ -431,6 +431,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     await this.cleanup();
 
+    // F-18: loudness metadata is per-track. Clear it on every load so the new
+    // track starts at 0 dB (recomputeNormalization below emits the reset);
+    // opt out with loudnessNormalization.retainMetadataAcrossLoads. The graph
+    // is silent here (old source disposed in cleanup, new source not started
+    // until play()), so the effective reset is instantaneous — no ramp smear.
+    if (!this._options.loudnessNormalization.retainMetadataAcrossLoads) {
+      this._loudnessMetadata = null;
+    }
+
     this._stateManager.transition("loading");
 
     this.emit("loadstart");

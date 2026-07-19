@@ -11,6 +11,12 @@ export interface LoudnessNormalizationOptions {
   maxGainDb?: number;
   maxAttenuationDb?: number;
   smoothTimeSec?: number;
+  /**
+   * When false (default), loudness metadata is cleared on every `load()`, so a
+   * new track starts at 0 dB until its own metadata is set. When true, metadata
+   * (and thus normalization gain) is recomputed and re-applied across loads.
+   */
+  retainMetadataAcrossLoads?: boolean;
 }
 
 export interface ComputeNormalizationGainOptions {
@@ -32,6 +38,7 @@ export const DEFAULT_LOUDNESS_NORMALIZATION_OPTIONS: Required<LoudnessNormalizat
     maxGainDb: 12,
     maxAttenuationDb: 24,
     smoothTimeSec: 0.05,
+    retainMetadataAcrossLoads: false,
   };
 
 export const dbToGain = (db: number): number => {

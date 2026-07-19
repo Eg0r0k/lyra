@@ -958,4 +958,53 @@ describe("Player", () => {
       }
     });
   });
+
+  describe("loudness metadata reset on load (T-12)", () => {
+    it("resets normalization gain to 0 dB on a new load and fires normalizationchange", async () => {
+      const player = trackPlayer(
+        new Player({
+          mode: "html5",
+          loudnessNormalization: { enabled: true, targetLufs: -16 },
+        }),
+      );
+
+      await player.load("https://cdn.example.com/a.mp3");
+      player.setLoudnessMetadata({ integratedLufs: -22 }); // +6 dB
+      expect(player.getAppliedNormalizationGainDb()).toBe(6);
+
+      const events: { enabled: boolean; gainDb: number }[] = [];
+      player.on("normalizationchange", (e) => events.push(e));
+
+      await player.load("https://cdn.example.com/b.mp3");
+
+      expect(player.loudnessMetadata).toBeNull();
+      expect(player.getAppliedNormalizationGainDb()).toBe(0);
+      expect(events.some((e) => e.enabled === false && e.gainDb === 0)).toBe(
+        true,
+      );
+    });
+
+    it("retains metadata across loads when retainMetadataAcrossLoads is set", async () => {
+      const player = trackPlayer(
+        new Player({
+          mode: "html5",
+          loudnessNormalization: {
+            enabled: true,
+            targetLufs: -16,
+            retainMetadataAcrossLoads: true,
+          },
+        }),
+      );
+
+      await player.load("https://cdn.example.com/a.mp3");
+      player.setLoudnessMetadata({ integratedLufs: -22 }); // +6 dB
+      expect(player.getAppliedNormalizationGainDb()).toBe(6);
+
+      await player.load("https://cdn.example.com/b.mp3");
+
+      // Metadata survives and is recomputed/re-applied for the new track.
+      expect(player.loudnessMetadata).toEqual({ integratedLufs: -22 });
+      expect(player.getAppliedNormalizationGainDb()).toBe(6);
+    });
+  });
 });

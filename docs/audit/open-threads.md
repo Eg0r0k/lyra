@@ -15,3 +15,4 @@
 ## Deferred doc requirements (for T-25 README overhaul)
 
 - **Fades section**: document that `fadeOut()` (without `fadeOutAndPause`/`fadeOutAndStop`) leaves the fade multiplier at 0 while playback continues; raising `volume` will NOT restore sound. Recovery is `fadeIn()` (or use the And-Pause/And-Stop variants). Note the new `player.fadeMultiplier` getter (0..1) alongside `isFading`, and that fade and volume are independent multipliers (T-10).
+- **Normalization section** (T-12): document the per-track workflow — loudness metadata is cleared on every `load()`, so the pattern is `await load(src)` → `setLoudnessMetadata(meta)`. Note the `loudnessNormalization.retainMetadataAcrossLoads` opt-out (default `false`) for apps that reuse one measurement across tracks.
