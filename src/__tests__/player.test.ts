@@ -1400,5 +1400,29 @@ describe("Player", () => {
       expect(consumerHandler).toHaveBeenCalled();
       expect(resumed).toHaveBeenCalled();
     });
+
+    it("removes its statechange listener from an injected context on dispose (no dangling handler)", async () => {
+      const ctx = new MockAudioContext();
+      const player = new Player({
+        mode: "webaudio",
+        audioContext: ctx as unknown as AudioContext,
+      });
+      await player.load({ data: createArrayBuffer() });
+
+      expect(ctx.statechangeListenerCount).toBe(1); // player's listener installed
+
+      const resumed = vi.fn();
+      player.on("contextresumed", resumed);
+      await player.dispose();
+
+      // Listener detached — the still-alive external context has no dangling
+      // handler from the dead player.
+      expect(ctx.statechangeListenerCount).toBe(0);
+
+      // Further statechange must not reach the disposed player.
+      ctx.setState("suspended");
+      ctx.setState("running");
+      expect(resumed).not.toHaveBeenCalled();
+    });
   });
 });
